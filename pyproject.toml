@@ -3,10 +3,35 @@ name = "hoshi-vc"
 version = "0.1.0"
 
 requires-python = "~=3.10.11"
-dependencies = []
+dependencies = [
+    "click~=8.1",
+    "faiss-gpu~=1.7",
+    "fastdtw~=0.3",
+    "inaspeechsegmenter~=0.7",
+    "librosa~=0.9",
+    "matplotlib~=3.7",
+    "msgpack-numpy~=0.4",
+    "msgpack~=1.0",
+    "numpy~=1.23",
+    "onnx~=1.14",
+    "onnxruntime-gpu~=1.15",
+    "optuna~=3.2",
+    "phonemizer~=3.2",
+    "pysoundfile~=0.9",
+    "resampy~=0.4",
+    "speechmetrics[cpu] @ git+https://github.com/aliutkus/speechmetrics",
+    "torch~=2.0",
+    "torchcrepe~=0.0",
+    "tqdm~=4.65",
+    "transformers~=4.29",
+    "wandb~=0.15",
+]
 
 [tool.pdm.dev-dependencies]
 dev = [
+    "gprof2dot~=2022.7",
+    "ipykernel~=6.23",
+    "ipywidgets~=8.0",
     "yapf~=0.33",
 ]
 
@@ -15,10 +40,10 @@ package-dir = "."
 
 [tool.yapf]
 based_on_style = "yapf"
-join_multiple_lines = true
-column_limit = 160
 blank_line_before_nested_class_or_def = false
 blank_lines_around_top_level_definition = 1
+column_limit = 160
+join_multiple_lines = true
 
 [build-system]
 requires = ["pdm-pep517>=0.12.0"]
