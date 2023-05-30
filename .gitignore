@@ -1,21 +1,26 @@
 # private / large files
-/data/
-/wandb/
 .env
 .env.production
 .pdm-python
+/data/
+/wandb/
 
 # auto generated
-node_modules/
 __pycache__/
 .ipynb_checkpoints/
 .venv/
+dist/
+dist-ssr/
+node_modules/
+target/
+
+/client/src-tauri/icons
 
 # logs
 npm-debug.log*
+pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store

@@ -23,5 +23,8 @@
     "**/Thumbs.db": true,
     // additional settings
     "**/__pycache__": true
+  },
+  "[ignore]": {
+    "editor.defaultFormatter": "foxundermoon.shell-format"
   }
 }

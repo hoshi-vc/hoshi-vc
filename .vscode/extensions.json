@@ -3,5 +3,7 @@
     "editorconfig.editorconfig",
     "esbenp.prettier-vscode",
     "ms-python.python",
+    "rust-lang.rust-analyzer",
+    "tauri-apps.tauri-vscode"
   ]
 }
