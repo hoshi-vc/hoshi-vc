@@ -1,0 +1,6 @@
+[python]
+use_venv = true
+
+[venv]
+backend = "venv"
+in_project = true

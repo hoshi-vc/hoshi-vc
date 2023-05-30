@@ -1,0 +1,21 @@
+# private / large files
+/data/
+/wandb/
+.env
+.env.production
+.pdm-python
+
+# auto generated
+node_modules/
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# macOS-specific files
+.DS_Store

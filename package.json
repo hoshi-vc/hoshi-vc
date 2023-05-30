@@ -1,0 +1,12 @@
+{
+  "name": "hoshi-vc",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "ncu": "pnpm update --recursive --interactive",
+    "ncu:latest": "pnpm update --recursive --interactive --latest"
+  },
+  "devDependencies": {
+    "prettier": "^2.8.8"
+  }
+}

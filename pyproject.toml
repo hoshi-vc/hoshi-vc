@@ -1,0 +1,25 @@
+[project]
+name = "hoshi-vc"
+version = "0.1.0"
+
+requires-python = "~=3.10.11"
+dependencies = []
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "yapf~=0.33",
+]
+
+[tool.pdm.build]
+package-dir = "."
+
+[tool.yapf]
+based_on_style = "yapf"
+join_multiple_lines = true
+column_limit = 160
+blank_line_before_nested_class_or_def = false
+blank_lines_around_top_level_definition = 1
+
+[build-system]
+requires = ["pdm-pep517>=0.12.0"]
+build-backend = "pdm.pep517.api"
