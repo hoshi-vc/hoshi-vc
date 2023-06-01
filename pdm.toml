@@ -1,3 +1,5 @@
+build_isolation = true
+
 [python]
 use_venv = true
 

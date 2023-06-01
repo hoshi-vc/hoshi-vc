@@ -21,6 +21,7 @@ dependencies = [
     "resampy~=0.4",
     "speechmetrics[cpu] @ git+https://github.com/aliutkus/speechmetrics",
     "torch~=2.0",
+    "torchaudio~=2.0",
     "torchcrepe~=0.0",
     "tqdm~=4.65",
     "transformers~=4.29",
@@ -34,6 +35,11 @@ dev = [
     "ipywidgets~=8.0",
     "yapf~=0.33",
 ]
+
+[[tool.pdm.source]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+verify_ssl = true
 
 [tool.pdm.build]
 package-dir = "."
