@@ -1,5 +1,6 @@
 import os
 import zipfile
+from contextlib import contextmanager
 from os import path
 from pathlib import Path
 from typing import Any, Callable, TypeVar, Union
@@ -35,3 +36,29 @@ class FilteredDataset(Dataset[T]):
 
   def __len__(self) -> int:
     return len(self._indices)
+
+@contextmanager
+def timer(desc: str = "Duration"):
+  from time import monotonic_ns
+  start = monotonic_ns()
+  yield
+  end = monotonic_ns()
+  print(f"{desc}: {(end - start) / 1e6:.3f} ms")
+
+@contextmanager
+def hide_warns():
+  import logging
+  import warnings
+
+  with change_loglevel("transformers", logging.ERROR):
+    with warnings.catch_warnings():
+      warnings.simplefilter("ignore")
+      yield
+
+@contextmanager
+def change_loglevel(logger: str, level: int):
+  import logging
+  prev_level = logging.getLogger(logger).level
+  logging.getLogger(logger).setLevel(level)
+  yield
+  logging.getLogger(logger).setLevel(prev_level)

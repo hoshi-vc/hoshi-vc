@@ -19,6 +19,7 @@ JVSCategory = Literal["falset10", "nonpara30", "parallel100", "whisper10"]
 class JVSEntry(NamedTuple):
   audio: Tensor
   sr: int
+  name: str
   speaker_id: str
   category_id: JVSCategory
   utterance_id: str
@@ -58,8 +59,9 @@ class JVS(Dataset[JVSEntry]):
   def __getitem__(self, n: int) -> JVSEntry:
     filepath = self._walker[n]
     (speaker_id, category_id, _, utterance_id) = filepath.parts
+    name = f"jvs/{speaker_id}/{category_id}/{utterance_id}"
     audio, sr = torchaudio.load(path.join(self._path, filepath))
-    return JVSEntry(audio, sr, speaker_id, category_id, utterance_id)
+    return JVSEntry(audio, sr, name, speaker_id, category_id, utterance_id)
 
   def __len__(self) -> int:
     return len(self._walker)

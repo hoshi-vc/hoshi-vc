@@ -3,7 +3,7 @@ from IPython.display import Audio, display
 from torch import Tensor
 
 def plot_specgram(audio: Tensor, sr: int, title="Spectrogram", xlim=None):
-  audio = audio.numpy()
+  audio = audio.cpu().numpy()
 
   num_channels, _ = audio.shape
 
@@ -20,16 +20,22 @@ def plot_specgram(audio: Tensor, sr: int, title="Spectrogram", xlim=None):
   plt.show(block=False)
 
 def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin"):
+  specgram = specgram.cpu()
+
   fig, axs = plt.subplots(1, 1)
+  fig.set_size_inches(10, 3)
+
   axs.set_title(title or "Spectrogram")
   axs.set_ylabel(ylabel)
   axs.set_xlabel("frame")
-  im = axs.imshow(specgram.transpose(0, 1), origin="lower", aspect="auto")
+  im = axs.imshow(specgram.transpose(0, 1), origin="lower", aspect="auto", interpolation="none")
   fig.colorbar(im, ax=axs)
   plt.show(block=False)
 
 def play_audio(audio: Tensor, sr: int):
-  audio = audio.numpy()
+  audio = audio.cpu().numpy()
+
+  if audio.ndim == 1: audio = audio[None, :]
 
   num_channels, _ = audio.shape
   if num_channels == 1:
