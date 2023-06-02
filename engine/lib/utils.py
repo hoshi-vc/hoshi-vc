@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar, Union
 
 import numpy as np
+import torch
 from numpy.typing import NDArray
 from torch import device as TorchDevice
 from torch.utils.data import Dataset
@@ -71,3 +72,26 @@ def np_safesave(file: str | Path, arr: NPArray):
 
   np.save(str(file) + ".tmp.npy", arr)
   os.replace(str(file) + ".tmp.npy", file)
+
+def clamp(x: float, mn: float, mx: float) -> float:
+  return max(min(x, mx), mn)
+
+def save_ckpt(path: Path | str, data: dict = {}, **kwargs):
+  path = str(path)
+  make_parents(path)
+
+  ckpt = {"data": data}
+  for k, v in kwargs.items():
+    ckpt[k] = v.state_dict()
+
+  torch.save(ckpt, path + ".tmp")
+  os.replace(path + ".tmp", path)
+
+def load_ckpt(path: Path | str, **kwargs) -> dict:
+  path = str(path)
+  ckpt = torch.load(path)
+
+  for k, v in kwargs.items():
+    v.load_state_dict(ckpt[k])
+
+  return ckpt["data"]

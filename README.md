@@ -53,6 +53,8 @@ python engine/hello.py
 
 なので今度は、音程を調節してから切り貼りするようにしたら良くなるかためしてみる。
 
+→ 音程に依らない表現を作るのがうまくできなかったので、ひとまず後回しにした。
+
 <!-- TODO: [関連する Notebook](engine/attempt02.ipynb) -->
 
 <!-- TODO: Write more details, results, observations, and conclusions. -->
