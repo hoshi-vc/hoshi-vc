@@ -1,5 +1,3 @@
-# Faiss Unofficial Guide: https://www.pinecone.io/learn/faiss-tutorial/
-
 # %% [markdown]
 # This notebook (\*.ipynb) was generated from the corresponding python file (\*.py).
 #
@@ -11,7 +9,6 @@
 
 import numpy as np
 import torch
-from tqdm import tqdm
 
 from engine.lib.utils import NPArray
 from engine.lib.utils_ui import play_audio, plot_spectrogram
@@ -21,13 +18,13 @@ device = "cuda"
 
 P = Preparation(device)
 
-P.prepare_kv_pairs()
+P.prepare_feats()
 P.prepare_faiss()
 
 # %%
 
 index = P.get_index("jvs001")
-values = P.get_values("jvs001")
+target_mel = P.get_mel("jvs001")
 
 item = P.dataset[1000]
 print(item.name)
@@ -36,14 +33,14 @@ audio, sr = item.audio[0], item.sr
 mel = P.extract_melspec(audio, sr)
 keys = P.extract_wav2vec2(audio, sr).cpu().numpy()
 
-top_k = 128
+top_k = 16
 
 hat = []
 for i in range(len(keys)):
   D, I = index.search(keys[None, i], top_k)
   items: list[NPArray] = []
   for j in range(top_k):
-    items.append(values[I[0][j]])
+    items.append(target_mel[I[0][j]])
   hat.append(np.mean(np.stack(items), axis=0))
 hat = torch.as_tensor(np.vstack(hat))
 

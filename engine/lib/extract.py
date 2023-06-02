@@ -1,17 +1,16 @@
-# TODO: MelSpectrogram のパラメーターを調節する : hop_length は wav2vec2 にあわせて、 n_mels は hifi-gan に合わせた。
+# %%
 
-import warnings
-from logging import warning
 from os import PathLike
 
 import torch
 import torch.nn.functional as F
+import torchcrepe
 from torch import Tensor
 from torchaudio.functional import resample
 from transformers import Wav2Vec2Model, Wav2Vec2Processor
 
 from engine.hifi_gan.meldataset import mel_spectrogram
-from engine.lib.utils import hide_warns
+from engine.lib.utils import Device, hide_warns
 
 class Wav2Vec2:
   def __init__(self, preprocessor: Wav2Vec2Processor, model: Wav2Vec2Model):
@@ -61,3 +60,47 @@ def extract_melspec(audio: Tensor, sr: int) -> Tensor:
 
   mel = mel[0].transpose(0, 1)
   return mel.float()  # shape: (seq_len, 80)
+
+def extract_pitch_matrix(audio: Tensor, sr: int, model: str, device: Device) -> Tensor:
+  if sr != 16000:
+    audio = resample(audio, sr, 16000)
+
+  with torch.no_grad():
+    audio = F.pad(audio, (351, 352))
+    batch = next(torchcrepe.preprocess(audio.unsqueeze(0), sr, hop_length=320, device=device, pad=False))
+    matrix = torchcrepe.infer(batch, model=model)
+
+  return matrix.float()  # shape: (seq_len, 360)
+
+def extract_pitch_topk(audio: Tensor, sr: int, model: str, topk: int, device: Device) -> tuple[Tensor, Tensor]:
+  pitch = extract_pitch_matrix(audio, sr, model, device)
+  pitch = pitch.topk(topk)
+  return pitch.indices.to(torch.int16), pitch.values.float()  # shape: (seq_len, topk)
+
+if __name__ == "__main__":
+  from tqdm import tqdm
+
+  from engine.preparation import Preparation
+
+  device = "cuda"
+  P = Preparation(device)
+
+  item = P.dataset[0]
+  audio0 = item.audio.repeat((1, 3))[0]
+
+  # すべての features が同じ長さになっているか確認
+  for j in tqdm(range(480 * 2, len(audio0), 480)):
+    lens = []
+    for i in range(j, j + 2):
+      # TODO: あとから気がついたけど、この resample を外すとだめだった。
+      #       よくわからないから preparetion.py で適当に出力を padding して対処することにした。
+      audio, sr = audio0[:i], item.sr
+      audio, sr = resample(audio, sr, 16000), 16000
+
+      mel = P.extract_melspec(audio, sr)
+      w2v2 = P.extract_wav2vec2(audio, sr)
+      pi, pv = P.extract_pitch_topk(audio, sr, "tiny", 2, device)
+      assert mel.shape[0] == w2v2.shape[0] == pi.shape[0] == pv.shape[0]
+      lens.append(mel.shape[0])
+    assert lens[0] + 1 == lens[1]
+    assert lens[0] == j / 480 - 1

@@ -32,6 +32,7 @@ class JVS(Dataset[JVSEntry]):
       root: str | Path,
       download: bool = False,
       url: str = URL,
+      no_audio: bool = False,
   ) -> None:
     root = fspath(root)
 
@@ -56,11 +57,16 @@ class JVS(Dataset[JVSEntry]):
     self._walker = sorted(str(p.relative_to(self._path)) for p in Path(self._path).glob("*/*/wav24kHz16bit/*.wav"))
     self._walker = [Path(p) for p in self._walker]
 
+    self._no_audio = no_audio
+
   def __getitem__(self, n: int) -> JVSEntry:
     filepath = self._walker[n]
     (speaker_id, category_id, _, utterance_id) = filepath.parts
     name = f"jvs/{speaker_id}/{category_id}/{utterance_id}"
-    audio, sr = torchaudio.load(path.join(self._path, filepath))
+    if self._no_audio:
+      audio, sr = None, None
+    else:
+      audio, sr = torchaudio.load(path.join(self._path, filepath))
     return JVSEntry(audio, sr, name, speaker_id, category_id, utterance_id)
 
   def __len__(self) -> int:
