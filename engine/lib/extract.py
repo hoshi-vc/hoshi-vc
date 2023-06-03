@@ -102,6 +102,11 @@ def extract_melspec(audio: Tensor, sr: int) -> Tensor:
   mel = mel[0].transpose(0, 1)
   return mel.float()  # shape: (seq_len, 80)
 
+def extract_energy(audio: Tensor, sr: int) -> Tensor:
+  mel = extract_melspec(audio, sr)
+  energy = torch.mean(mel, dim=1)
+  return energy.unsqueeze(-1).float()  # shape: (seq_len, 1)
+
 def extract_pitch_matrix(audio: Tensor, sr: int, model: str, device: Device) -> Tensor:
   if sr != 16000:
     audio = resample(audio, sr, 16000)

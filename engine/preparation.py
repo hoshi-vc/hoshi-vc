@@ -9,7 +9,7 @@ from autofaiss import build_index
 from tqdm import tqdm
 
 from engine.lib.dataset_jvs import JVS, JVSCategory
-from engine.lib.extract import (Phoneme, Wav2Vec2, extract_melspec, extract_pitch_matrix, extract_pitch_topk)
+from engine.lib.extract import (Phoneme, Wav2Vec2, extract_energy, extract_melspec, extract_pitch_matrix, extract_pitch_topk)
 from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
 
@@ -38,6 +38,10 @@ class Preparation:
     return extract_melspec
 
   @cached_property
+  def extract_energy(self):
+    return extract_energy
+
+  @cached_property
   def extract_wav2vec2(self):
     return Wav2Vec2.load("facebook/wav2vec2-base").to(self.device)
 
@@ -58,16 +62,18 @@ class Preparation:
       for speaker_id in self.dataset.speaker_ids:
         DIR = FEATS_DIR / category_id / speaker_id
         MEL = DIR / "mel.npy"
+        ENERGY = DIR / "energy.npy"
         W2V2 = DIR / "w2v2.npy"
         PHONEME_I = DIR / f"phoneme_i_{PHONEME_TOPK}.npy"
         PHONEME_V = DIR / f"phoneme_v_{PHONEME_TOPK}.npy"
         PITCH_I = DIR / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy"
         PITCH_V = DIR / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy"
 
-        if MEL.exists() and W2V2.exists() and PHONEME_I.exists() and PHONEME_V.exists() and PITCH_I.exists() and PITCH_V.exists():
+        if MEL.exists() and ENERGY.exists() and W2V2.exists() and PHONEME_I.exists() and PHONEME_V.exists() and PITCH_I.exists() and PITCH_V.exists():
           continue
 
         mel_list: list[NPArray] = []
+        energy_list: list[NPArray] = []
         w2v2_list: list[NPArray] = []
         phoneme_i_list: list[NPArray] = []
         phoneme_v_list: list[NPArray] = []
@@ -82,11 +88,13 @@ class Preparation:
           # Extract features
           audio, sr = item.audio[0], item.sr
           mel = self.extract_melspec(audio, sr)
+          energy = self.extract_energy(audio, sr)
           w2v2 = self.extract_wav2vec2(audio, sr)
           phoneme_i, phoneme_v = self.extract_phoneme(audio, sr, PHONEME_TOPK)
           pitch_i, pitch_v = self.extract_pitch_topk(audio, sr, CREPE_MODEL, PITCH_TOPK, self.device)
 
           mel = mel.cpu().numpy()
+          energy = energy.cpu().numpy()
           w2v2 = w2v2.cpu().numpy()
           phoneme_i = phoneme_i.cpu().numpy()
           phoneme_v = phoneme_v.cpu().numpy()
@@ -94,6 +102,9 @@ class Preparation:
           pitch_v = pitch_v.cpu().numpy()
 
           # TODO: 本当は extract 関数の出力がすべて同じ長さになっていてほしい...
+          if mel.shape[0] != energy.shape[0]:
+            print(f"mel.shape[0] != energy.shape[0] :: {mel.shape[0]} != {energy.shape[0]} ({item.name})")
+            energy = pad_clip(mel, energy)
           if mel.shape[0] != w2v2.shape[0]:
             print(f"mel.shape[0] != w2v2.shape[0] :: {mel.shape[0]} != {w2v2.shape[0]} ({item.name})")
             w2v2 = pad_clip(mel, w2v2)
@@ -107,10 +118,11 @@ class Preparation:
             pitch_i = pad_clip(mel, pitch_i)
             pitch_v = pad_clip(mel, pitch_v)
 
-          assert mel.shape[0] == w2v2.shape[0] == phoneme_i.shape[0] == phoneme_v.shape[0] == pitch_i.shape[0] == pitch_v.shape[0]
+          assert mel.shape[0] == energy.shape[0] == w2v2.shape[0] == phoneme_i.shape[0] == phoneme_v.shape[0] == pitch_i.shape[0] == pitch_v.shape[0]
 
           # Append to storage
           mel_list.append(mel)
+          energy_list.append(energy)
           w2v2_list.append(w2v2)
           phoneme_i_list.append(phoneme_i)
           phoneme_v_list.append(phoneme_v)
@@ -121,6 +133,7 @@ class Preparation:
 
         DIR.mkdir(parents=True, exist_ok=True)
         np_safesave(MEL, np.concatenate(mel_list))
+        np_safesave(ENERGY, np.concatenate(energy_list))
         np_safesave(W2V2, np.concatenate(w2v2_list))
         np_safesave(PHONEME_I, np.concatenate(phoneme_i_list))
         np_safesave(PHONEME_V, np.concatenate(phoneme_v_list))
@@ -160,6 +173,9 @@ class Preparation:
   def get_mel(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
     return np.load(FEATS_DIR / category_id / speaker_id / f"mel.npy")
 
+  def get_energy(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
+    return np.load(FEATS_DIR / category_id / speaker_id / f"energy.npy")
+
   def get_w2v2(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
     return np.load(FEATS_DIR / category_id / speaker_id / f"w2v2.npy")
 
@@ -192,3 +208,29 @@ if __name__ == "__main__":
   P = Preparation("cuda")
   P.prepare_feats()
   P.prepare_faiss()
+
+  # %%
+  # ちゃんと特徴たちがアラインしているかを目視で確認したくて書いた
+
+  from matplotlib import pyplot as plt
+
+  s = 33900
+  s = 0
+  e = s + 200
+  mel = P.get_mel("jvs001")[s:e]
+  energy = P.get_energy("jvs001")[s:e]
+  w2v2 = P.get_w2v2("jvs001")[s:e]
+  phoneme_i, phoneme_v = P.get_phoneme_topk("jvs001")
+  pitch_i, pitch_v = P.get_pitch_topk("jvs001")
+  phoneme_i = phoneme_i[s:e]
+  phoneme_v = phoneme_v[s:e]
+  pitch_i = pitch_i[s:e]
+  pitch_v = pitch_v[s:e]
+
+  plt.pcolormesh(mel.T), plt.show()
+  plt.plot(energy), plt.xlim(0, e - s), plt.show()
+  plt.pcolormesh(np.flip(np.dot(w2v2, w2v2.T), 0)), plt.show()
+  plt.plot(pitch_i[:, 0]), plt.xlim(0, e - s), plt.show()
+  plt.plot(pitch_v[:, 0]), plt.xlim(0, e - s), plt.show()
+  plt.plot(phoneme_i[:, 0] == 0), plt.xlim(0, e - s), plt.show()
+  plt.plot(phoneme_v[:, 0]), plt.xlim(0, e - s), plt.show()

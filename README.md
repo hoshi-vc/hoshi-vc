@@ -67,6 +67,16 @@ Fragment VC がどれくらいの性能なのか、実際に確認してみる�
 
 <!-- TODO: [関連する Notebook](engine/attempt03.ipynb) -->
 
+### Attempt 04: FragmentVC に変更を加える
+
+FastSpeech2 をベースにして声質変換を試みたときと比べて、学習がとても遅かったので、性能向上も目指していくつかの変更を加える。
+
+- データ転送を削減するため query, key につかう特徴量を変える
+- 学習を容易にするため value につかう特徴量を変える
+- モデルの構造に FastSpeech2 の構造をつかってみる
+- (ログ出力に attention map も追加する)
+- (前処理を追加する)
+
 <!-- TODO: Write more details, results, observations, and conclusions. -->
 
 ## 参考にしたものなど

@@ -5,6 +5,43 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import (BatchNorm1d, Conv1d, Dropout, LayerNorm, Linear, Module, MultiheadAttention, ReLU, Sequential, Tanh, TransformerEncoder)
 
+class FakeFragmentVC(Module):
+  """ データセットにエラーがないことを確認するためのデバッグ用モデル :: wav2vec2 -> melspec """
+  def __init__(self, d_model=512):
+    super().__init__()
+
+    self.unet = UnetBlock(8)
+
+    self.main = Sequential(
+        Conv1d(80, d_model, kernel_size=1),
+        ReLU(),
+        Conv1d(d_model, d_model, kernel_size=5, padding=2),
+        ReLU(),
+        Conv1d(d_model, d_model, kernel_size=5, padding=2),
+        ReLU(),
+        Conv1d(d_model, 80, kernel_size=1),
+    )
+
+  def forward(
+      self,
+      srcs: Tensor,
+      refs: Optional[Tensor] = None,
+      src_masks: Optional[Tensor] = None,
+      ref_masks: Optional[Tensor] = None,
+  ) -> Tuple[Tensor, List[Optional[Tensor]]]:
+    """
+    Args:
+      srcs: (batch, src_len, 768)
+      refs: (batch, 80, ref_len)
+    """
+
+    srcs = srcs.transpose(1, 2)  #       (batch, 768, src_len)
+    refs = refs[:, :, :srcs.shape[2]]  # (batch,  80, src_len)
+    out = self.main(refs)  #             (batch,  80, src_len)
+
+    # out: (batch, 80, src_len)
+    return out, []
+
 class FragmentVC(Module):
   def __init__(self, d_model=512):
     super().__init__()
@@ -15,27 +52,27 @@ class FragmentVC(Module):
 
     self.mel_linear = Linear(d_model, 80)
 
-    self.post_net = Sequential(
-        Conv1d(80, 512, kernel_size=5, padding=2),
-        BatchNorm1d(512),
-        Tanh(),
-        Dropout(0.5),
-        Conv1d(512, 512, kernel_size=5, padding=2),
-        BatchNorm1d(512),
-        Tanh(),
-        Dropout(0.5),
-        Conv1d(512, 512, kernel_size=5, padding=2),
-        BatchNorm1d(512),
-        Tanh(),
-        Dropout(0.5),
-        Conv1d(512, 512, kernel_size=5, padding=2),
-        BatchNorm1d(512),
-        Tanh(),
-        Dropout(0.5),
-        Conv1d(512, 80, kernel_size=5, padding=2),
-        BatchNorm1d(80),
-        Dropout(0.5),
-    )
+    # self.post_net = Sequential(
+    #     Conv1d(80, 512, kernel_size=5, padding=2),
+    #     BatchNorm1d(512),
+    #     Tanh(),
+    #     Dropout(0.5),
+    #     Conv1d(512, 512, kernel_size=5, padding=2),
+    #     BatchNorm1d(512),
+    #     Tanh(),
+    #     Dropout(0.5),
+    #     Conv1d(512, 512, kernel_size=5, padding=2),
+    #     BatchNorm1d(512),
+    #     Tanh(),
+    #     Dropout(0.5),
+    #     Conv1d(512, 512, kernel_size=5, padding=2),
+    #     BatchNorm1d(512),
+    #     Tanh(),
+    #     Dropout(0.5),
+    #     Conv1d(512, 80, kernel_size=5, padding=2),
+    #     BatchNorm1d(80),
+    #     Dropout(0.5),
+    # )
 
   def forward(
       self,
@@ -65,8 +102,8 @@ class FragmentVC(Module):
 
     # out: (batch, 80, src_len)
     out = out.transpose(1, 0).transpose(2, 1)
-    refined = self.post_net(out)
-    out = out + refined
+    # refined = self.post_net(out)
+    # out = out + refined
 
     # out: (batch, 80, src_len)
     return out, attns

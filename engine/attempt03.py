@@ -8,33 +8,23 @@
 # %%
 
 import random
-from typing import Optional
+from pathlib import Path
 
 import lightning.pytorch as L
-import numpy as np
 import torch
 import torch.nn.functional as F
 import wandb
-from lightning.pytorch import callbacks as C
-from lightning.pytorch.loggers import WandbLogger
-from torch import Tensor, nn
+from torch import Tensor
 from torch.optim import AdamW
-from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 from wandb.wandb_run import Run
 
-from engine.dataset_feats import (FeatureDataset, FeatureEntry, IntraDomainDataset, IntraDomainEntry)
-from engine.fragment_vc.model import FragmentVC
+from engine.dataset_feats import IntraDomainEntry
+from engine.fragment_vc.models import FragmentVC
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
-from engine.lib.grad_rev import GradientReversal
-from engine.lib.utils import DATA_DIR, NPArray, clamp, make_parents, save_ckpt
-from engine.lib.utils_ui import play_audio, plot_spectrogram, plot_spectrograms
-from engine.preparation import (CREPE_MODEL, FEATS_DIR, PITCH_TOPK, Preparation, pad_clip)
-
-device = "cuda"
-
-P = Preparation(device)
+from engine.lib.utils import clamp
+from engine.lib.utils_ui import plot_spectrograms
+from engine.preparation import Preparation
+from engine.utils import (IntraDomainDataModule, new_checkpoint_callback, new_wandb_logger, setup_train_environment)
 
 # Pytorch Lightning
 #   https://lightning.ai/docs/pytorch/latest/starter/introduction.html
@@ -42,31 +32,6 @@ P = Preparation(device)
 #   https://lightning.ai/docs/pytorch/stable/common/lightning_module.html
 # DataModule
 #   https://lightning.ai/docs/pytorch/stable/data/datamodule.html#what-is-a-datamodule
-
-class IntraDomainDataModule(L.LightningDataModule):
-  # 公式実装では intra_valid からも intra_train の音声を参照用にサンプリングしてる。
-  # TODO: うまくいかなかったら、公式実装と同じ挙動にしてみる。
-  def __init__(self, frames: int, n_samples: int, batch_size: int, num_workers: int = 4):
-    super().__init__()
-    self.frames = frames
-    self.n_samples = n_samples
-    self.batch_size = batch_size
-    self.num_workers = num_workers
-    self.intra_train: Optional[IntraDomainDataset] = None
-    self.intra_valid: Optional[IntraDomainDataset] = None
-
-  def setup(self, stage: str):
-    P.prepare_feats()
-    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in P.dataset.speaker_ids]
-    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in P.dataset.speaker_ids]
-    self.intra_train = IntraDomainDataset(train_dirs, self.frames, self.frames, self.n_samples, random_offset=True)
-    self.intra_valid = IntraDomainDataset(valid_dirs, self.frames, self.frames, self.n_samples, random_offset=False)
-
-  def train_dataloader(self):
-    return DataLoader(self.intra_train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
-
-  def val_dataloader(self):
-    return DataLoader(self.intra_valid, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 
 class FragmentVCModule(L.LightningModule):
   def __init__(self, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
@@ -82,6 +47,10 @@ class FragmentVCModule(L.LightningModule):
 
     # save hyper-parameters to self.hparams auto-logged by wandb
     self.save_hyperparameters()  # __init__ のすべての引数を self.hparams に保存する
+
+  def log_wandb(self, item: dict):
+    wandb_logger: Run = self.logger.experiment
+    wandb_logger.log(item, step=self.trainer.global_step)
 
   def _process_batch(self, batch: IntraDomainEntry, self_exclude: float, ref_included: bool) -> tuple[Tensor, Tensor]:
     src = batch[0].w2v2
@@ -135,9 +104,8 @@ class FragmentVCModule(L.LightningModule):
 
     self.log("valid_loss", loss)
     if batch_idx == 0:
-      wandb_logger: Run = self.logger.experiment
       for i in range(4):
-        wandb_logger.log({f"spectrogram/{i:02d}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
+        self.log_wandb({f"spectrogram/{i:02d}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
 
     return loss
 
@@ -162,34 +130,32 @@ class FragmentVCModule(L.LightningModule):
 
 # init the module
 
-torch.set_float32_matmul_precision("medium")  # TODO: 精度落として問題ない？
+PROJECT = Path(__file__).stem
 
-fragment_vc = FragmentVCModule(warmup_steps=500, total_steps=250000, milestones=(50000, 150000), exclusive_rate=1.0)
-
-intra_datamodule = IntraDomainDataModule(frames=256, n_samples=10, batch_size=8, num_workers=8)
-
-(DATA_DIR / "wandb").mkdir(parents=True, exist_ok=True)
-wandb_logger = WandbLogger(entity="hoshi-vc", project="attempt03", save_dir=DATA_DIR)
-run_name = wandb_logger.experiment.name
-
-checkpoint_callback = C.ModelCheckpoint(
-    dirpath=DATA_DIR / "attempt03" / "checkpoints" / run_name,
-    filename="{step:08d}-{valid_loss:.2f}",
-    monitor="valid_loss",
-    mode="min",
-    save_top_k=3,
+setup_train_environment()
+P = Preparation("cuda")
+datamodule = IntraDomainDataModule(P, frames=256, n_samples=10, batch_size=8)
+model = FragmentVCModule(
+    warmup_steps=500,
+    total_steps=250000,
+    milestones=(50000, 150000),
+    exclusive_rate=1.0,
 )
 
+wandb_logger = new_wandb_logger(PROJECT)
+
 trainer = L.Trainer(
-    max_steps=fragment_vc.total_steps,
+    max_steps=model.total_steps,
     logger=wandb_logger,
-    callbacks=[checkpoint_callback],
+    callbacks=[
+        new_checkpoint_callback(PROJECT, wandb_logger.experiment.name),
+    ],
     accelerator="gpu",
     precision="16-mixed",
 )
 
 # train the model
-trainer.fit(model=fragment_vc, datamodule=intra_datamodule)
+trainer.fit(model, datamodule=datamodule)
 
 # [optional] finish the wandb run, necessary in notebooks
 wandb.finish()

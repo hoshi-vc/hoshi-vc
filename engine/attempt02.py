@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from engine.dataset_feats import FeatureDataset, FeatureEntry
-from engine.lib.grad_rev import GradientReversal
+from engine.lib.layers import GradientReversal
 from engine.lib.utils import DATA_DIR, NPArray, clamp, save_ckpt
 from engine.lib.utils_ui import play_audio, plot_spectrogram
 from engine.preparation import (CREPE_MODEL, FEATS_DIR, PITCH_TOPK, Preparation, pad_clip)
