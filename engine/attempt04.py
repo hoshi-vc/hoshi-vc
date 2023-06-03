@@ -89,9 +89,9 @@ class VCModel(nn.Module):
     self.lookup = nn.MultiheadAttention(hdim, 4, dropout=0.1, batch_first=True)
 
     self.decode = nn.Sequential(
-        # input: (batch, src_len, hdim)
+        # input: (batch, src_len, hdim + energy_dim + pitch_dim)
         Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+        nn.Conv1d(hdim + energy_dim + pitch_dim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -100,41 +100,56 @@ class VCModel(nn.Module):
         Transpose(1, 2),
     )
 
-  def forward_key(self, energy_i: Tensor, pitch_i: Tensor, phoneme_i: Tensor, phoneme_v: Tensor):
-    energy = self.energy_embed(self.energy_bins(energy_i[:, :, 0]))
-    pitch = self.pitch_embed(pitch_i[:, :, 0])
+  def forward_energy(self, energy_i: Tensor):
+    return self.energy_embed(self.energy_bins(energy_i[:, :, 0]))
 
+  def forward_pitch(self, pitch_i: Tensor):
+    return self.pitch_embed(pitch_i[:, :, 0])
+
+  def forward_phoneme(self, phoneme_i: Tensor, phoneme_v: Tensor):
     phoneme: Optional[Tensor] = None
     for k in range(phoneme_v.shape[-1]):
       emb_k = self.phoneme_embed(phoneme_i[:, :, k])
       emb_k *= phoneme_v[:, :, k].exp().unsqueeze(-1)
       phoneme = emb_k if phoneme is None else phoneme + emb_k
+    return phoneme
 
-    key = torch.cat([energy, pitch, phoneme], dim=-1)
-    key = self.encode_key(key)
+  def forward_mel(self, mel: Tensor):
+    return self.mel_encode(mel)
 
-    return key
+  def forward_key(self, energy: Tensor, pitch: Tensor, phoneme: Tensor):
+    return self.encode_key(torch.cat([energy, pitch, phoneme], dim=-1))
 
-  def forward_value(self, energy_i: Tensor, pitch_i: Tensor, mel: Tensor):
-    energy = self.energy_embed(self.energy_bins(energy_i[:, :, 0]))
-    pitch = self.pitch_embed(pitch_i[:, :, 0])
-    mel = self.mel_encode(mel)
-
-    value = torch.cat([energy, pitch, mel], dim=-1)
-    value = self.encode_value(value)
-
-    return value
+  def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
+    return self.encode_value(torch.cat([energy, pitch, mel], dim=-1))
 
   def forward(self, o: Input04):
+
+    # key: 似たような発音ほど近い表現になってほしい
+    #      話者性が多少残ってても lookup 後の value への影響は間接的なので多分問題ない
+
+    # value: 可能な限り多くの発音情報や話者性を含む表現になってほしい
+    #        ただし、ピッチや音量によらない表現になってほしい
+    #        （デコード時にピッチと音量を調節するので、そこと情報の衝突が起きないでほしい）
+
     # shape: (batch, src_len, hdim)
-    src_key = self.forward_key(o.src_energy, o.src_pitch_i, o.src_phoneme_i, o.src_phoneme_v)
-    ref_key = self.forward_key(o.ref_energy, o.ref_pitch_i, o.ref_phoneme_i, o.ref_phoneme_v)
-    ref_value = self.forward_value(o.ref_energy, o.ref_pitch_i, o.ref_mel)
+    src_energy = self.forward_energy(o.src_energy)
+    src_pitch = self.forward_pitch(o.src_pitch_i)
+    src_phoneme = self.forward_phoneme(o.src_phoneme_i, o.src_phoneme_v)
+    src_key = self.forward_key(src_energy, src_pitch, src_phoneme)
+
+    ref_energy = self.forward_energy(o.ref_energy)
+    ref_pitch = self.forward_pitch(o.ref_pitch_i)
+    ref_phoneme = self.forward_phoneme(o.ref_phoneme_i, o.ref_phoneme_v)
+    ref_key = self.forward_key(ref_energy, ref_pitch, ref_phoneme)
+
+    ref_mel = self.forward_mel(o.ref_mel)
+    ref_value = self.forward_value(ref_energy, ref_pitch, ref_mel)
 
     tgt_value, _ = self.lookup(src_key, ref_key, ref_value)
 
     # shape: (batch, src_len, 80)
-    tgt_mel = self.decode(tgt_value)
+    tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
 
     return tgt_mel, (ref_key, ref_value)
 
