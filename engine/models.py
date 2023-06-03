@@ -83,7 +83,6 @@ class Model04(nn.Module):
   def forward_key(self, energy_i: Tensor, pitch_i: Tensor, phoneme_i: Tensor, phoneme_v: Tensor):
     energy = self.energy_embed(self.energy_bins(energy_i[:, :, 0]))
     pitch = self.pitch_embed(pitch_i[:, :, 0])
-    pitch *= phoneme_v[:, :, 0].unsqueeze(-1)
 
     phoneme: Optional[Tensor] = None
     for k in range(phoneme_v.shape[-1]):
