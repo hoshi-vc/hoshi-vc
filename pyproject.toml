@@ -10,6 +10,7 @@ dependencies = [
     "fastdtw~=0.3",
     "inaspeechsegmenter~=0.7",
     "librosa~=0.9",
+    "lightning~=2.0",
     "matplotlib~=3.7",
     "msgpack-numpy~=0.4",
     "msgpack~=1.0",

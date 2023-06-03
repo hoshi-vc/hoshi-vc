@@ -9,12 +9,14 @@ from autofaiss import build_index
 from tqdm import tqdm
 
 from engine.lib.dataset_jvs import JVS, JVSCategory
-from engine.lib.extract import (Wav2Vec2, extract_melspec, extract_pitch_matrix, extract_pitch_topk)
+from engine.lib.extract import (Phoneme, Wav2Vec2, extract_melspec, extract_pitch_matrix, extract_pitch_topk)
 from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
 
 PITCH_TOPK = 8
 CREPE_MODEL = "tiny"
+
+PHONEME_TOPK = 8
 
 FEATS_DIR = DATA_DIR / "attempt01" / "feats"
 FAISS_DIR = DATA_DIR / "attempt01" / "faiss"
@@ -40,6 +42,10 @@ class Preparation:
     return Wav2Vec2.load("facebook/wav2vec2-base").to(self.device)
 
   @cached_property
+  def extract_phoneme(self):
+    return Phoneme.load("facebook/wav2vec2-xlsr-53-espeak-cv-ft").to(self.device)
+
+  @cached_property
   def extract_pitch_matrix(self):
     return extract_pitch_matrix
 
@@ -51,15 +57,20 @@ class Preparation:
     for category_id in ["parallel100", "nonpara30"]:
       for speaker_id in self.dataset.speaker_ids:
         DIR = FEATS_DIR / category_id / speaker_id
-        W2V2 = DIR / "w2v2.npy"
         MEL = DIR / "mel.npy"
+        W2V2 = DIR / "w2v2.npy"
+        PHONEME_I = DIR / f"phoneme_i_{PHONEME_TOPK}.npy"
+        PHONEME_V = DIR / f"phoneme_v_{PHONEME_TOPK}.npy"
         PITCH_I = DIR / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy"
         PITCH_V = DIR / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy"
 
-        if W2V2.exists() and MEL.exists() and PITCH_I.exists() and PITCH_V.exists(): return
+        if MEL.exists() and W2V2.exists() and PHONEME_I.exists() and PHONEME_V.exists() and PITCH_I.exists() and PITCH_V.exists():
+          continue
 
-        w2v2_list: list[NPArray] = []
         mel_list: list[NPArray] = []
+        w2v2_list: list[NPArray] = []
+        phoneme_i_list: list[NPArray] = []
+        phoneme_v_list: list[NPArray] = []
         pitch_i_list: list[NPArray] = []
         pitch_v_list: list[NPArray] = []
 
@@ -70,12 +81,15 @@ class Preparation:
 
           # Extract features
           audio, sr = item.audio[0], item.sr
-          w2v2 = self.extract_wav2vec2(audio, sr)
           mel = self.extract_melspec(audio, sr)
+          w2v2 = self.extract_wav2vec2(audio, sr)
+          phoneme_i, phoneme_v = self.extract_phoneme(audio, sr, PHONEME_TOPK)
           pitch_i, pitch_v = self.extract_pitch_topk(audio, sr, CREPE_MODEL, PITCH_TOPK, self.device)
 
-          w2v2 = w2v2.cpu().numpy()
           mel = mel.cpu().numpy()
+          w2v2 = w2v2.cpu().numpy()
+          phoneme_i = phoneme_i.cpu().numpy()
+          phoneme_v = phoneme_v.cpu().numpy()
           pitch_i = pitch_i.cpu().numpy()
           pitch_v = pitch_v.cpu().numpy()
 
@@ -83,30 +97,35 @@ class Preparation:
           if mel.shape[0] != w2v2.shape[0]:
             print(f"mel.shape[0] != w2v2.shape[0] :: {mel.shape[0]} != {w2v2.shape[0]} ({item.name})")
             w2v2 = pad_clip(mel, w2v2)
+          if mel.shape[0] != phoneme_i.shape[0]:
+            print(f"mel.shape[0] != phoneme.shape[0] :: {mel.shape[0]} != {phoneme_i.shape[0]} ({item.name})")
+            phoneme_i = pad_clip(mel, phoneme_i)
+            phoneme_v = pad_clip(mel, phoneme_v)
           if mel.shape[0] != pitch_i.shape[0]:
             if abs(mel.shape[0] - pitch_i.shape[0]) > 2:
               print(f"mel.shape[0] != pitch.shape[0] :: {mel.shape[0]} != {pitch_i.shape[0]} ({item.name})")
             pitch_i = pad_clip(mel, pitch_i)
             pitch_v = pad_clip(mel, pitch_v)
 
-          assert w2v2.shape[0] == mel.shape[0] == pitch_i.shape[0] == pitch_v.shape[0]
+          assert mel.shape[0] == w2v2.shape[0] == phoneme_i.shape[0] == phoneme_v.shape[0] == pitch_i.shape[0] == pitch_v.shape[0]
 
           # Append to storage
-          w2v2_list.append(w2v2)
           mel_list.append(mel)
+          w2v2_list.append(w2v2)
+          phoneme_i_list.append(phoneme_i)
+          phoneme_v_list.append(phoneme_v)
           pitch_i_list.append(pitch_i)
           pitch_v_list.append(pitch_v)
 
         # print(w2v2_list[0].dtype, mel_list[0].dtype, pitch_i_list[0].dtype, pitch_v_list[0].dtype)
 
         DIR.mkdir(parents=True, exist_ok=True)
-        np_safesave(W2V2, np.concatenate(w2v2_list))
         np_safesave(MEL, np.concatenate(mel_list))
+        np_safesave(W2V2, np.concatenate(w2v2_list))
+        np_safesave(PHONEME_I, np.concatenate(phoneme_i_list))
+        np_safesave(PHONEME_V, np.concatenate(phoneme_v_list))
         np_safesave(PITCH_I, np.concatenate(pitch_i_list))
         np_safesave(PITCH_V, np.concatenate(pitch_v_list))
-
-        del w2v2_list
-        del mel_list
 
   def prepare_faiss(self):
     for speaker_id in tqdm(self.dataset.speaker_ids, ncols=0, desc="Building index"):
@@ -138,11 +157,16 @@ class Preparation:
 
       del indices
 
+  def get_mel(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
+    return np.load(FEATS_DIR / category_id / speaker_id / f"mel.npy")
+
   def get_w2v2(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
     return np.load(FEATS_DIR / category_id / speaker_id / f"w2v2.npy")
 
-  def get_mel(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
-    return np.load(FEATS_DIR / category_id / speaker_id / f"mel.npy")
+  def get_phoneme_topk(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> tuple[NPArray, NPArray]:
+    i = np.load(FEATS_DIR / category_id / speaker_id / f"phoneme_i_{PHONEME_TOPK}.npy")
+    v = np.load(FEATS_DIR / category_id / speaker_id / f"phoneme_v_{PHONEME_TOPK}.npy")
+    return i, v
 
   def get_pitch_topk(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> tuple[NPArray, NPArray]:
     i = np.load(FEATS_DIR / category_id / speaker_id / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy")

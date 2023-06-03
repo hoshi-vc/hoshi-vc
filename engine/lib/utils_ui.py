@@ -44,3 +44,20 @@ def play_audio(audio: Tensor, sr: int):
     display(Audio((audio[0], audio[1]), rate=sr))
   else:
     raise ValueError("Waveform with more than 2 channels are not supported.")
+
+def plot_spectrograms(y: Tensor, y_hat: Tensor):
+  y = y.cpu()
+  y_hat = y_hat.cpu()
+
+  fig = plt.figure()
+  axs = fig.subplots(2, 1)
+  fig.set_size_inches(10, 6)
+
+  axs[0].set_title("Ground Truth")
+  axs[0].imshow(y.transpose(0, 1), origin="lower", aspect="auto", interpolation="none")
+  axs[0].get_yaxis().set_visible(False)
+  axs[1].set_title("Predicted")
+  axs[1].imshow(y_hat.transpose(0, 1), origin="lower", aspect="auto", interpolation="none")
+  axs[1].get_yaxis().set_visible(False)
+
+  return fig

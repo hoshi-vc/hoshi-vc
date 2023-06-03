@@ -2,12 +2,13 @@
 
 from os import PathLike
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torchcrepe
 from torch import Tensor
 from torchaudio.functional import resample
-from transformers import Wav2Vec2Model, Wav2Vec2Processor
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Model, Wav2Vec2Processor
 
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.utils import Device, hide_warns
@@ -47,6 +48,46 @@ class Wav2Vec2:
       model = Wav2Vec2Model.from_pretrained(pretrained_model_name_or_path)
     model.eval()
     return Wav2Vec2(preprocessor, model)
+
+class Phoneme:
+  def __init__(self, preprocessor: Wav2Vec2Processor, model: Wav2Vec2ForCTC):
+    self.preprocessor = preprocessor
+    self.model = model
+
+  def __call__(self, audio: Tensor, sr: int, top_k: int) -> Tensor:
+    if sr != 16000:
+      audio = resample(audio, sr, 16000)
+
+    # hifi-gan の出力と長さを合わせるための padding :: 試行錯誤してこの設定ならうまく行きそうだった
+    audio = F.pad(audio, (39, 40))
+
+    with torch.no_grad():
+      audio = self.preprocessor(audio, sampling_rate=16000, return_tensors="pt").input_values.to(self.device)
+      outputs = self.model(audio)
+
+      log_probs = F.log_softmax(outputs.logits, dim=-1)
+      k_log_probs, k_ids = torch.topk(log_probs, k=top_k, dim=-1)
+      k_ids = k_ids[0]
+      k_log_probs = k_log_probs[0]
+
+    return k_ids.to(torch.int16), k_log_probs.float()  # shape: (seq_len, topk)
+
+  def to(self, device: torch.device):
+    self.preprocessor = self.preprocessor
+    self.model = self.model.to(device)
+    return self
+
+  @property
+  def device(self) -> torch.device:
+    return self.model.device
+
+  @staticmethod
+  def load(pretrained_model_name_or_path: str | PathLike):
+    with hide_warns():
+      preprocessor = Wav2Vec2Processor.from_pretrained(pretrained_model_name_or_path)
+      model = Wav2Vec2ForCTC.from_pretrained(pretrained_model_name_or_path)
+    model.eval()
+    return Phoneme(preprocessor, model)
 
 def extract_melspec(audio: Tensor, sr: int) -> Tensor:
   if sr != 22050:

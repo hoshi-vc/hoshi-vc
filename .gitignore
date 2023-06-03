@@ -3,7 +3,6 @@
 .env.production
 .pdm-python
 /data/
-/wandb/
 
 # auto generated
 __pycache__/

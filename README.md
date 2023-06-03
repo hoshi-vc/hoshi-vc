@@ -47,15 +47,25 @@ python engine/hello.py
 
 [関連する Notebook](engine/attempt01.ipynb)
 
+<!-- TODO: 生成結果の音声を貼る :: 動画形式にすれば GitHub のプレビューに埋め込める -->
+
 ### Attempt 02: 音程によらない表現をつかう
 
 先の Attempt 01 では、音程があっていない音声を無理やりつなげているせいでうまくいかないように見えた。
 
-なので今度は、音程を調節してから切り貼りするようにしたら良くなるかためしてみる。
+なので今度は、音程を調節してから切り貼りするようにしたら良くなるか試してみる。
 
-→ 音程に依らない表現を作るのがうまくできなかったので、ひとまず後回しにした。
+→ 音程によらない表現を作るのがうまくできなかったので、ひとまず後回しにした。
 
 <!-- TODO: [関連する Notebook](engine/attempt02.ipynb) -->
+
+### Attempt 03: FragmentVC をつかう
+
+Fragment VC がどれくらいの性能なのか、実際に確認してみる。
+
+公式の実装があるので、それを使ってみる。
+
+<!-- TODO: [関連する Notebook](engine/attempt03.ipynb) -->
 
 <!-- TODO: Write more details, results, observations, and conclusions. -->
 
