@@ -1,4 +1,5 @@
-from typing import Any, Optional, Type
+from os import path
+from typing import Any
 
 import lightning.pytorch as L
 import matplotlib
@@ -7,7 +8,7 @@ from lightning.pytorch import callbacks as C
 from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
-from engine.dataset_feats import IntraDomainDataset
+from engine.dataset_feats import IntraDomainDataset, IntraDomainDataset2
 from engine.lib.utils import DATA_DIR
 from engine.preparation import FEATS_DIR, Preparation
 
@@ -19,9 +20,9 @@ def new_wandb_logger(project: str):
   (DATA_DIR / "wandb").mkdir(parents=True, exist_ok=True)
   return WandbLogger(entity="hoshi-vc", project=project, save_dir=DATA_DIR)
 
-def new_checkpoint_callback(project: str, run_name: str, **kwargs):
+def new_checkpoint_callback(project: str, run_path: str, **kwargs):
   return C.ModelCheckpoint(
-      dirpath=DATA_DIR / project / "checkpoints" / run_name,
+      dirpath=DATA_DIR / project / "checkpoints" / run_path,
       filename="{step:08d}-{valid_loss:.4f}",
       monitor="valid_loss",
       mode="min",
@@ -29,6 +30,12 @@ def new_checkpoint_callback(project: str, run_name: str, **kwargs):
       save_last=True,
       **kwargs,
   )
+
+def new_checkpoint_callback_wandb(project: str, wandb_logger: WandbLogger, **kwargs):
+  run_name = wandb_logger.experiment.name
+  run_id = wandb_logger.experiment.id
+  run_path = run_name + path.sep + run_id
+  return new_checkpoint_callback(project, run_path, **kwargs)
 
 class IntraDomainDataModule(L.LightningDataModule):
   # 公式実装では intra_valid からも intra_train の音声を参照用にサンプリングしてる。
@@ -56,3 +63,7 @@ class IntraDomainDataModule(L.LightningDataModule):
 
   def val_dataloader(self):
     return DataLoader(self.intra_valid, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+
+class IntraDomainDataModule2(IntraDomainDataModule):
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4):
+    super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset2)
