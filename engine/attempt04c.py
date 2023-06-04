@@ -208,14 +208,16 @@ class VCModule(L.LightningModule):
 
     club_sp_x = ref_key
     club_sp_y = src.speaker.repeat(1, ref_key.shape[1])
+    club_sp_n = src.speaker[torch.randperm(src.speaker.shape[0])].repeat(1, ref_key.shape[1])
 
     loss_reconst = F.l1_loss(y_hat, y)
     loss_mi = self.club(club_x, club_y)
     loss_club = self.club.learning_loss(club_x, club_y)
-    loss_mi_sp = self.club_sp(club_sp_x, club_sp_y)
+    loss_mi_sp = self.club_sp(club_sp_x, club_sp_y, club_sp_n)
     loss_club_sp = self.club_sp.learning_loss(club_sp_x, club_sp_y)
 
-    loss_model = loss_reconst + loss_mi + loss_mi_sp
+    # loss_model = loss_reconst + loss_mi + loss_mi_sp
+    loss_model = loss_reconst + loss_mi
 
     return y_hat, (loss_model, loss_club, loss_club_sp), (loss_reconst, loss_mi, loss_mi_sp)
 

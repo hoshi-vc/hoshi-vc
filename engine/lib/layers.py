@@ -1,4 +1,6 @@
 # %%
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -138,6 +140,7 @@ class CLUBSampleForCategorical(nn.Module):
   def __init__(self, xdim: int, ynum: int, hdim: int):
     super().__init__()
 
+    self.ynum = ynum
     self.logvar = nn.Sequential(
         nn.Linear(xdim, hdim),
         nn.ReLU(),
@@ -146,6 +149,9 @@ class CLUBSampleForCategorical(nn.Module):
         nn.Linear(hdim, ynum),
     )
 
+  def _sample_negatives(self, xs: Tensor, ys: Tensor):
+    return ys[torch.randperm(xs.shape[0])]
+
   def log_likelihood(self, xs: Tensor, ys: Tensor):
     xs = xs.reshape(-1, xs.shape[-1])
     ys = ys.reshape(-1)
@@ -153,14 +159,15 @@ class CLUBSampleForCategorical(nn.Module):
     logits = self.logvar(xs)
     return -F.cross_entropy(logits, ys)
 
-  def forward(self, xs: Tensor, ys: Tensor):
+  def forward(self, xs: Tensor, ys: Tensor, ns: Optional[Tensor] = None):
     xs = xs.reshape(-1, xs.shape[-1])
     ys = ys.reshape(-1)
+    if ns is not None: ns = ns.reshape(-1)
 
     logits = self.logvar(xs)
 
     # それぞれの x に対してランダムに一つの y を選ぶ
-    ns = ys[torch.randperm(xs.shape[0])]
+    if ns is None: ns = self._sample_negatives(xs, ys)
 
     pos = -F.cross_entropy(logits, ys, reduction='none')
     neg = -F.cross_entropy(logits, ns, reduction='none')
@@ -171,8 +178,13 @@ class CLUBSampleForCategorical(nn.Module):
     # だからこの実装でもそうすることにした。正当性は検証してないし、論文も読んでないけど大丈夫でしょ！
     return (pos - neg).mean()
 
-  def learning_loss(self, inputs, labels):
-    return -self.log_likelihood(inputs, labels)
+  def learning_loss(self, xs: Tensor, ys: Tensor):
+    return -self.log_likelihood(xs, ys)
+
+class CLUBSampleForCategorical2(CLUBSampleForCategorical):
+  """ 多分、全てのカテゴリが同じ割合で出現するときだけちゃんと機能する """
+  def _sample_negatives(self, xs: Tensor, ys: Tensor):
+    return torch.randint(0, self.ynum, size=ys.shape, device=xs.device)
 
 def check_club():
   # 公式に提供されている学習例と比べることで、処理が変わっていないことを確認する
