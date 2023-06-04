@@ -92,7 +92,7 @@ class Preparation:
           audio, sr = item.audio[0], item.sr
           audio = audio.numpy()
           audio = trim_silence(audio, sr)
-          audio = librosa.util.normalize(audio)
+          audio = librosa.util.normalize(audio) * 0.95
           audio = torch.as_tensor(audio)
 
           # extract features

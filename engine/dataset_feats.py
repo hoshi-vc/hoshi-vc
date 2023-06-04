@@ -49,23 +49,22 @@ IntraDomainEntry = list[FeatureEntry]
 
 class IntraDomainDataset(Dataset):
   """ ランダムサンプリングされた音声 + その同一話者の複数の音声 (公式実装と同じく n_samples + 1 個の要素を返す) """
-  def __init__(self, dirs: list[str], frames: int, start_hop: int, n_samples: int, random_offset: bool, shuffle: Optional[int] = None):
-    dirs = sorted(dirs)
+  def __init__(self, dirs: list[str], speaker_ids: list[int], frames: int, start_hop: int, n_samples: int, random_offset: bool, shuffle: Optional[int] = None):
 
+    assert len(dirs) == len(speaker_ids)
     self.random = Random(35534253)
     self.random2 = Random(54235235)
-    self.dirs = dirs
     self.frames = frames
     self.start_hop = start_hop
     self.n_samples = n_samples
     self.random_offset = random_offset
 
-    self.starts: list[tuple[str, int]] = []
+    self.starts: list[tuple[str, int, int]] = []
     self.same_domain_lut: dict[str, list[int]] = {}
-    for d in dirs:
+    for d, speaker_id in zip(dirs, speaker_ids):
       length = np.load(d / "mel.npy", mmap_mode="r").shape[0]
-      for i in range(0, length - frames - start_hop, start_hop):
-        self.starts.append((d, i))
+      for start in range(0, length - frames - start_hop, start_hop):
+        self.starts.append((d, speaker_id, start))
         self.same_domain_lut.setdefault(d, []).append(len(self.starts) - 1)
 
     if shuffle is not None:
@@ -76,14 +75,14 @@ class IntraDomainDataset(Dataset):
       if len(v) < n_samples + 1:
         raise ValueError(f"Domain {k} has only {len(v)} samples, which is less than {n_samples} + 1.")
 
-  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry:
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> FeatureEntry:
     return load_feature_entry(d, start, frames)
 
   def __len__(self) -> int:
     return len(self.starts)
 
   def __getitem__(self, index: int) -> IntraDomainEntry:
-    d, start = self.starts[index]
+    d, speaker_id, start = self.starts[index]
     offset = 0
     if self.random_offset: self.random.randint(0, self.start_hop)
 
@@ -91,12 +90,12 @@ class IntraDomainDataset(Dataset):
     other_indices = self.random2.sample(other_indices, self.n_samples + 1)
 
     entries: list[FeatureEntry] = []
-    entries.append(self.load_entry(d, start + offset, self.frames))
+    entries.append(self.load_entry(d, speaker_id, start + offset, self.frames))
     for i in other_indices:
       if i == index: continue
       if len(entries) == self.n_samples + 1: break
-      d, start = self.starts[i]
-      entries.append(self.load_entry(d, start + offset, self.frames))
+      d, speaker_id, start = self.starts[i]
+      entries.append(self.load_entry(d, speaker_id, start + offset, self.frames))
 
     return entries
 
@@ -118,10 +117,11 @@ class IntraDomainDataModule(L.LightningDataModule):
     self.P.prepare_feats()
     train_dirs = [FEATS_DIR / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
     valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
+    speaker_ids = [i for i, _ in enumerate(self.P.dataset.speaker_ids)]
 
     # TODO: club の計算時にはバッチ内の多様性が大切なので、 valid_dataset も固定シードでシャッフルすることにした
-    self.intra_train = self.dataset_class(train_dirs, self.frames, self.frames, self.n_samples, random_offset=True)
-    self.intra_valid = self.dataset_class(valid_dirs, self.frames, self.frames, self.n_samples, random_offset=False, shuffle=7892639)
+    self.intra_train = self.dataset_class(train_dirs, speaker_ids, self.frames, self.frames, self.n_samples, random_offset=True)
+    self.intra_valid = self.dataset_class(valid_dirs, speaker_ids, self.frames, self.frames, self.n_samples, random_offset=False, shuffle=7892639)
 
   def train_dataloader(self):
     return DataLoader(self.intra_train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
@@ -140,6 +140,7 @@ def load_feature_entry(d: str, start: int, frames: int) -> FeatureEntry:
   )
 
 class FeatureEntry2(NamedTuple):
+  speaker: Tensor
   energy: Tensor
   mel: Tensor
   phoneme_i: Tensor
@@ -150,10 +151,11 @@ class FeatureEntry2(NamedTuple):
 IntraDomainEntry2 = list[FeatureEntry2]
 
 class IntraDomainDataset2(IntraDomainDataset):
-  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry2:
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> FeatureEntry2:
     end = start + frames
 
     return FeatureEntry2(
+        speaker=np.array([speaker_id]),
         energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
         mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
         phoneme_i=np.array(np.load(d / f"phoneme_i_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
@@ -170,6 +172,7 @@ class IntraDomainDataModule2(IntraDomainDataModule):
     super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset2)
 
 class FeatureEntry3(NamedTuple):
+  speaker: Tensor
   energy: Tensor
   mel: Tensor
   pitch_i: Tensor
@@ -179,10 +182,11 @@ class FeatureEntry3(NamedTuple):
 IntraDomainEntry3 = list[FeatureEntry3]
 
 class IntraDomainDataset3(IntraDomainDataset):
-  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry3:
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> FeatureEntry3:
     end = start + frames
 
     return FeatureEntry3(
+        speaker=np.array([speaker_id]),
         energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
         mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
         pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
