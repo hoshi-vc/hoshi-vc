@@ -15,6 +15,7 @@ import lightning.pytorch as L
 import torch
 import torch.functional as F
 import torch.nn.functional as F
+import torch.optim.lr_scheduler as S
 import wandb
 from matplotlib import pyplot as plt
 from torch import Tensor, nn
@@ -23,11 +24,11 @@ from wandb.wandb_run import Run
 
 from engine.dataset_feats import IntraDomainEntry2
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
-from engine.lib.layers import Buckets, GetNth, Transpose
+from engine.lib.layers import Buckets, CLUBSample, GetNth, Transpose
 from engine.lib.utils import clamp
 from engine.lib.utils_ui import plot_spectrograms
 from engine.preparation import Preparation
-from engine.utils import (IntraDomainDataModule2, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
+from engine.utils import (IntraDomainDataModule2, log_audios, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class Input04(NamedTuple):
   src_energy: Tensor  #    (batch, src_len, 1)
@@ -48,15 +49,17 @@ class VCModel(nn.Module):
 
     energy_dim = hdim // 4
     pitch_dim = hdim // 4
-    others_dim = hdim - energy_dim - pitch_dim
+    phoneme_dim = hdim // 2
+    mel_dim = hdim // 2
+
     self.energy_bins = Buckets(-11.0, -3.0, 128)
     self.energy_embed = nn.Embedding(128, energy_dim)
     self.pitch_embed = nn.Embedding(360, pitch_dim)
-    self.phoneme_embed = nn.Embedding(400, others_dim)
+    self.phoneme_embed = nn.Embedding(400, phoneme_dim)
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + pitch_dim + phoneme_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -71,11 +74,11 @@ class VCModel(nn.Module):
         nn.LayerNorm(hdim),
     )
 
-    self.mel_encode = nn.Linear(80, others_dim)
+    self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + mel_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -121,7 +124,7 @@ class VCModel(nn.Module):
     return self.encode_key(torch.cat([energy, pitch, phoneme], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
-    return self.encode_value(torch.cat([energy, pitch, mel], dim=-1))
+    return self.encode_value(torch.cat([energy, mel], dim=-1))
 
   def forward(self, o: Input04):
 
@@ -151,20 +154,28 @@ class VCModel(nn.Module):
     # shape: (batch, src_len, 80)
     tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
 
-    return tgt_mel, (ref_key, ref_value)
+    return tgt_mel, (ref_key, ref_value, ref_pitch)
 
 class VCModule(L.LightningModule):
-  def __init__(self, hdim: int, lr: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
+  def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
     super().__init__()
     self.model = VCModel(hdim=hdim)
+    self.club = CLUBSample(xdim=hdim, ydim=hdim // 4, hdim=hdim)
+    self.club_probe = CLUBSample(xdim=hdim, ydim=hdim // 4, hdim=hdim)
 
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
     self.exclusive_rate = exclusive_rate
     self.lr = lr
+    self.lr_club = lr_club
 
     self.save_hyperparameters()
+
+    # NOTE: activates manual optimization.
+    # https://lightning.ai/docs/pytorch/stable/common/optimization.html
+    # https://lightning.ai/docs/pytorch/stable/notebooks/lightning_examples/basic-gan.html
+    self.automatic_optimization = False
 
   def batches_that_stepped(self):
     # https://github.com/Lightning-AI/lightning/issues/13752
@@ -187,7 +198,7 @@ class VCModule(L.LightningModule):
 
     y = src.mel
     y_hat: Tensor
-    y_hat, (ref_key, ref_value) = self.model(
+    y_hat, (ref_key, ref_value, ref_pitch) = self.model(
         Input04(
             src_energy=src.energy,
             src_phoneme_i=src.phoneme_i,
@@ -202,12 +213,19 @@ class VCModule(L.LightningModule):
 
     assert y.shape == y_hat.shape
 
+    club_x = ref_value.reshape(-1, ref_value.shape[-1])
+    club_y = ref_pitch.reshape(-1, ref_pitch.shape[-1]).detach()
+
     loss_reconst = F.l1_loss(y_hat, y)
-    # loss_kv = F.l1_loss(ref_key, ref_value.detach())
+    loss_mi = self.club(club_x, club_y)
+    loss_club = self.club.learning_loss(club_x, club_y)
 
-    loss = loss_reconst
+    loss_mi_probe = self.club_probe(club_x, club_y)
+    loss_club_probe = self.club_probe.learning_loss(club_x, club_y)
 
-    return y_hat, loss, (loss_reconst,)
+    loss_model = loss_reconst + loss_mi
+
+    return y_hat, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe)
 
   def training_step(self, batch: IntraDomainEntry2, batch_idx: int):
     step = self.batches_that_stepped()
@@ -216,36 +234,70 @@ class VCModule(L.LightningModule):
     self_exclude = clamp(milestone_progress, 0.0, 1.0) * self.exclusive_rate
     ref_included = step >= milestones[0]
 
-    y_hat, loss, (loss_reconst,) = self._process_batch(batch, self_exclude, ref_included)
+    opt_model, opt_club = self.optimizers()
+    sch_model, sch_club = self.lr_schedulers()
 
+    # TODO: club 学習時には model を完全に動かす必要はなくて forward_key くらいでもいい。
+    # referenced: https://github.com/Wendison/VQMIVC/blob/851b4f5ca5bb60c11fea6a618affeb4979b17cf3/train.py#L27
+
+    self.toggle_optimizer(opt_club)
+    _, (_, loss_club, loss_club_probe), _ = self._process_batch(batch, self_exclude, ref_included)
+    opt_club.zero_grad()
+    self.manual_backward(loss_club + loss_club_probe)
+    opt_club.step()
+    sch_club.step()
+    self.untoggle_optimizer(opt_club)
+
+    self.toggle_optimizer(opt_model)
+    _, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe) = self._process_batch(batch, self_exclude, ref_included)
+    opt_model.zero_grad()
+    self.manual_backward(loss_model)
+    opt_model.step()
+    sch_model.step()
+    self.untoggle_optimizer(opt_model)
+
+    self.log("train_loss", loss_model)
+    self.log("train_loss_club", loss_club)
+    self.log("train_loss_club_probe", loss_club_probe)
     self.log("train_loss_reconst", loss_reconst)
-    self.log("train_loss", loss)
+    self.log("train_loss_mi", loss_mi)
+    self.log("train_loss_mi_probe", loss_mi_probe)
     self.log("self_exclude_rate", self_exclude)
-    self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
-    return loss
+    self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
+    self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
+    return loss_model
 
   def validation_step(self, batch: IntraDomainEntry2, batch_idx: int):
     y = batch[0].mel
-    y_hat, loss, (loss_reconst,) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
+    y_hat, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
 
+    self.log("valid_loss", loss_model)
+    self.log("valid_loss_club", loss_club)
+    self.log("valid_loss_club_probe", loss_club_probe)
     self.log("valid_loss_reconst", loss_reconst)
-    self.log("valid_loss", loss)
-    if batch_idx == 0:
-      for i in range(4):
-        self.log_wandb({f"spectrogram/{i:02d}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
-      plt.close("all")
+    self.log("valid_loss_mi", loss_mi)
+    self.log("valid_loss_mi_probe", loss_mi_probe)
 
-    return loss
+    if batch_idx == 0:
+      names = [f"{i:02d}" for i in range(4)]
+      log_spectrograms(self, names, y, y_hat)
+      log_audios(self, P, names, y, y_hat)
+
+    return loss_model
 
   def configure_optimizers(self):
-    optimizer = AdamW(self.parameters(), lr=self.lr)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, self.warmup_steps, self.total_steps)
+    opt_model = AdamW(self.model.parameters(), lr=self.lr)
+    opt_club = AdamW([*self.club.parameters(), *self.club_probe.parameters()], lr=self.lr_club)
+    sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
+    sch_club = S.ConstantLR(opt_club, 1.0)
 
-    return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+    return [opt_model, opt_club], [sch_model, sch_club]
 
 if __name__ == "__main__":
 
   PROJECT = Path(__file__).stem
+  assert PROJECT == "attempt04a"
+  PROJECT = "attempt04"
 
   setup_train_environment()
 
@@ -256,9 +308,10 @@ if __name__ == "__main__":
   model = VCModule(
       hdim=512,
       lr=1e-3,
+      lr_club=5e-3,
       warmup_steps=500,
       total_steps=50000,
-      milestones=(10000, 20000),
+      milestones=(5000, 10000),
       exclusive_rate=1.0,
   )
 

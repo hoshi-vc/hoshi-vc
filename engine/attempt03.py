@@ -48,9 +48,14 @@ class FragmentVCModule(L.LightningModule):
     # save hyper-parameters to self.hparams auto-logged by wandb
     self.save_hyperparameters()  # __init__ のすべての引数を self.hparams に保存する
 
+  def batches_that_stepped(self):
+    # https://github.com/Lightning-AI/lightning/issues/13752
+    # same as 'trainer/global_step' of wandb logger
+    return self.trainer.fit_loop.epoch_loop._batches_that_stepped
+
   def log_wandb(self, item: dict):
     wandb_logger: Run = self.logger.experiment
-    wandb_logger.log(item, step=self.trainer.global_step)
+    wandb_logger.log(item, step=self.batches_that_stepped())
 
   def _process_batch(self, batch: IntraDomainEntry, self_exclude: float, ref_included: bool) -> tuple[Tensor, Tensor]:
     src = batch[0].w2v2
@@ -73,7 +78,7 @@ class FragmentVCModule(L.LightningModule):
     return y, y_hat
 
   def training_step(self, batch: IntraDomainEntry, batch_idx: int):
-    step = self.trainer.global_step
+    step = self.batches_that_stepped()
     milestones = self.milestones
     milestone_progress = (step - milestones[0]) / (milestones[1] - milestones[0])
     self_exclude = clamp(milestone_progress, 0.0, 1.0) * self.exclusive_rate

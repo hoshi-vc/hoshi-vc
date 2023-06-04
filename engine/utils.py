@@ -4,12 +4,16 @@ from typing import Any
 import lightning.pytorch as L
 import matplotlib
 import torch
+import wandb
 from lightning.pytorch import callbacks as C
 from lightning.pytorch.loggers import WandbLogger
+from matplotlib import pyplot as plt
+from torch import Tensor
 from torch.utils.data import DataLoader
 
 from engine.dataset_feats import IntraDomainDataset, IntraDomainDataset2
 from engine.lib.utils import DATA_DIR
+from engine.lib.utils_ui import plot_spectrograms
 from engine.preparation import FEATS_DIR, Preparation
 
 def setup_train_environment():
@@ -67,3 +71,23 @@ class IntraDomainDataModule(L.LightningDataModule):
 class IntraDomainDataModule2(IntraDomainDataModule):
   def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4):
     super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset2)
+
+def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor):
+  for i, name in enumerate(names):
+    for i in range(4):
+      self.log_wandb({f"spectrogram/{name}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
+    plt.close("all")
+
+def log_audios(self, P: Preparation, names: list[str], y: Tensor, y_hat: Tensor):
+  step = self.batches_that_stepped()
+
+  data = []
+  for i, name in enumerate(names):
+    audio, sr = P.vocoder(y[i])
+    audio_hat, sr_hat = P.vocoder(y_hat[i])
+    data.append([
+        name,
+        wandb.Audio(audio.cpu().to(torch.float32), sample_rate=sr),
+        wandb.Audio(audio_hat.cpu().to(torch.float32), sample_rate=sr_hat),
+    ])
+  self.log_wandb({f"audio/{step:08d}": wandb.Table(data=data, columns=["index", "original", "reconstructed"])})
