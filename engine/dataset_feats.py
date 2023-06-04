@@ -1,5 +1,5 @@
 from random import Random
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, Optional
 
 import lightning.pytorch as L
 import numpy as np
@@ -18,6 +18,8 @@ class FeatureEntry(NamedTuple):
 
 class FeatureDataset(Dataset):
   def __init__(self, dirs: list[str], frames: int, start_hop: int, random_offset: bool):
+    dirs = sorted(dirs)
+
     self.random = Random()
     self.dirs = dirs
     self.frames = frames
@@ -47,7 +49,9 @@ IntraDomainEntry = list[FeatureEntry]
 
 class IntraDomainDataset(Dataset):
   """ ランダムサンプリングされた音声 + その同一話者の複数の音声 (公式実装と同じく n_samples + 1 個の要素を返す) """
-  def __init__(self, dirs: list[str], frames: int, start_hop: int, n_samples: int, random_offset: bool):
+  def __init__(self, dirs: list[str], frames: int, start_hop: int, n_samples: int, random_offset: bool, shuffle: Optional[int] = None):
+    dirs = sorted(dirs)
+
     self.random = Random()
     self.random2 = Random()
     self.dirs = dirs
@@ -63,6 +67,10 @@ class IntraDomainDataset(Dataset):
       for i in range(0, length - frames - start_hop, start_hop):
         self.starts.append((d, i))
         self.same_domain_lut.setdefault(d, []).append(len(self.starts) - 1)
+
+    if shuffle is not None:
+      rand = Random(shuffle)
+      rand.shuffle(self.starts)
 
     for k, v in self.same_domain_lut.items():
       if len(v) < n_samples + 1:
@@ -110,8 +118,10 @@ class IntraDomainDataModule(L.LightningDataModule):
     self.P.prepare_feats()
     train_dirs = [FEATS_DIR / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
     valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
+
+    # TODO: club の計算時にはバッチ内の多様性が大切なので、 valid_dataset も固定シードでシャッフルすることにした
     self.intra_train = self.dataset_class(train_dirs, self.frames, self.frames, self.n_samples, random_offset=True)
-    self.intra_valid = self.dataset_class(valid_dirs, self.frames, self.frames, self.n_samples, random_offset=False)
+    self.intra_valid = self.dataset_class(valid_dirs, self.frames, self.frames, self.n_samples, random_offset=False, shuffle=7892639)
 
   def train_dataloader(self):
     return DataLoader(self.intra_train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
