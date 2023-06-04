@@ -3,6 +3,7 @@ from os import path
 import matplotlib
 import torch
 import wandb
+from lightning import seed_everything
 from lightning.pytorch import callbacks as C
 from lightning.pytorch.loggers import WandbLogger
 from matplotlib import pyplot as plt
@@ -13,6 +14,7 @@ from engine.lib.utils_ui import plot_spectrograms
 from engine.preparation import Preparation
 
 def setup_train_environment():
+  seed_everything(90212374, workers=True)
   matplotlib.use("Agg")
   torch.set_float32_matmul_precision("medium")  # TODO: 精度落として問題ない？
 

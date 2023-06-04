@@ -7,8 +7,8 @@
 
 # %%
 
-import random
 from pathlib import Path
+from random import Random
 from typing import NamedTuple
 
 import lightning.pytorch as L
@@ -153,6 +153,7 @@ class VCModule(L.LightningModule):
     self.model = VCModel(hdim=hdim)
     self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim)
 
+    self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
@@ -181,7 +182,7 @@ class VCModule(L.LightningModule):
 
     refs = [src]
     if ref_included:
-      if random.random() >= self_exclude:
+      if self.batch_rand.random() >= self_exclude:
         refs = batch
       else:
         refs = batch[1:]
@@ -307,6 +308,7 @@ if __name__ == "__main__":
       ],
       accelerator="gpu",
       precision="16-mixed",
+      deterministic=True,
   )
 
   # train the model

@@ -7,8 +7,8 @@
 
 # %%
 
-import random
 from pathlib import Path
+from random import Random
 
 import lightning.pytorch as L
 import torch
@@ -39,6 +39,7 @@ class FragmentVCModule(L.LightningModule):
 
     # save_hyperparameters() によって self.hparams.lr = lr が自動的に行われるらしいけど、
     # 型チェックやオートコンプリートが働かないので self.lr から値を参照することにした。
+    self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
@@ -61,7 +62,7 @@ class FragmentVCModule(L.LightningModule):
     tgt = batch[0].mel
     ref = [o.mel for o in batch[1:]]
     if ref_included:
-      if random.random() >= self_exclude:
+      if self.batch_rand.random() >= self_exclude:
         ref = torch.cat([*ref, tgt], dim=1)
       else:
         ref = torch.cat(ref, dim=1)

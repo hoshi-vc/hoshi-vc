@@ -20,7 +20,7 @@ class FeatureDataset(Dataset):
   def __init__(self, dirs: list[str], frames: int, start_hop: int, random_offset: bool):
     dirs = sorted(dirs)
 
-    self.random = Random()
+    self.random = Random(43248650)
     self.dirs = dirs
     self.frames = frames
     self.start_hop = start_hop
@@ -52,8 +52,8 @@ class IntraDomainDataset(Dataset):
   def __init__(self, dirs: list[str], frames: int, start_hop: int, n_samples: int, random_offset: bool, shuffle: Optional[int] = None):
     dirs = sorted(dirs)
 
-    self.random = Random()
-    self.random2 = Random()
+    self.random = Random(35534253)
+    self.random2 = Random(54235235)
     self.dirs = dirs
     self.frames = frames
     self.start_hop = start_hop

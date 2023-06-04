@@ -7,8 +7,8 @@
 
 # %%
 
-import random
 from pathlib import Path
+from random import Random
 from typing import NamedTuple, Optional
 
 import lightning.pytorch as L
@@ -156,6 +156,7 @@ class VCModule(L.LightningModule):
     super().__init__()
     self.model = VCModel(hdim=hdim)
 
+    self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
@@ -178,7 +179,7 @@ class VCModule(L.LightningModule):
 
     refs = [src]
     if ref_included:
-      if random.random() >= self_exclude:
+      if self.batch_rand.random() >= self_exclude:
         refs = batch
       else:
         refs = batch[1:]
