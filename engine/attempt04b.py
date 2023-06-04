@@ -23,7 +23,7 @@ from wandb.wandb_run import Run
 
 from engine.dataset_feats import IntraDomainDataModule3, IntraDomainEntry3
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
-from engine.lib.layers import Buckets, CLUBSample, GetNth, Transpose
+from engine.lib.layers import (Buckets, CLUBSampleForCategorical, GetNth, Transpose)
 from engine.lib.utils import clamp
 from engine.preparation import Preparation
 from engine.utils import (log_audios, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
@@ -151,7 +151,7 @@ class VCModule(L.LightningModule):
   def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
     super().__init__()
     self.model = VCModel(hdim=hdim)
-    self.club = CLUBSample(xdim=hdim, ydim=hdim // 4, hdim=hdim)
+    self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim)
 
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
@@ -201,8 +201,9 @@ class VCModule(L.LightningModule):
 
     assert y.shape == y_hat.shape
 
-    club_x = ref_value.reshape(-1, ref_value.shape[-1])
-    club_y = ref_pitch.reshape(-1, ref_pitch.shape[-1]).detach()
+    club_x = ref_value
+    club_y = torch.cat([o.pitch_i for o in refs], dim=1)[:, :, 0]
+    # club_y = ref_pitch.detach()
 
     loss_reconst = F.l1_loss(y_hat, y)
     loss_mi = self.club(club_x, club_y)

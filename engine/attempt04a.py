@@ -210,8 +210,8 @@ class VCModule(L.LightningModule):
 
     assert y.shape == y_hat.shape
 
-    club_x = ref_value.reshape(-1, ref_value.shape[-1])
-    club_y = ref_pitch.reshape(-1, ref_pitch.shape[-1]).detach()
+    club_x = ref_value
+    club_y = ref_pitch.detach()
 
     loss_reconst = F.l1_loss(y_hat, y)
     loss_mi = self.club(club_x, club_y)
