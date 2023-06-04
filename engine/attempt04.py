@@ -16,18 +16,16 @@ import torch
 import torch.functional as F
 import torch.nn.functional as F
 import wandb
-from matplotlib import pyplot as plt
 from torch import Tensor, nn
 from torch.optim import AdamW
 from wandb.wandb_run import Run
 
-from engine.dataset_feats import IntraDomainEntry2
+from engine.dataset_feats import IntraDomainDataModule2, IntraDomainEntry2
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import clamp
-from engine.lib.utils_ui import plot_spectrograms
 from engine.preparation import Preparation
-from engine.utils import (IntraDomainDataModule2, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
+from engine.utils import (log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class Input04(NamedTuple):
   src_energy: Tensor  #    (batch, src_len, 1)
@@ -231,9 +229,8 @@ class VCModule(L.LightningModule):
     self.log("valid_loss_reconst", loss_reconst)
     self.log("valid_loss", loss)
     if batch_idx == 0:
-      for i in range(4):
-        self.log_wandb({f"spectrogram/{i:02d}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
-      plt.close("all")
+      names = [f"{i:02d}" for i in range(4)]
+      log_spectrograms(self, names, y, y_hat)
 
     return loss
 

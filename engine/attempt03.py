@@ -18,13 +18,12 @@ from torch import Tensor
 from torch.optim import AdamW
 from wandb.wandb_run import Run
 
-from engine.dataset_feats import IntraDomainEntry
+from engine.dataset_feats import IntraDomainDataModule, IntraDomainEntry
 from engine.fragment_vc.models import FragmentVC
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.lib.utils import clamp
-from engine.lib.utils_ui import plot_spectrograms
 from engine.preparation import Preparation
-from engine.utils import (IntraDomainDataModule, new_checkpoint_callback, new_wandb_logger, setup_train_environment)
+from engine.utils import (log_spectrograms, new_checkpoint_callback, new_wandb_logger, setup_train_environment)
 
 # Pytorch Lightning
 #   https://lightning.ai/docs/pytorch/latest/starter/introduction.html
@@ -109,8 +108,8 @@ class FragmentVCModule(L.LightningModule):
 
     self.log("valid_loss", loss)
     if batch_idx == 0:
-      for i in range(4):
-        self.log_wandb({f"spectrogram/{i:02d}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
+      names = [f"{i:02d}" for i in range(4)]
+      log_spectrograms(self, names, y, y_hat)
 
     return loss
 

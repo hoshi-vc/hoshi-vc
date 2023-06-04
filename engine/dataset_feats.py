@@ -1,11 +1,12 @@
 from random import Random
 from typing import Any, Callable, NamedTuple
 
+import lightning.pytorch as L
 import numpy as np
 from torch import Tensor
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
-from engine.preparation import CREPE_MODEL, PHONEME_TOPK, PITCH_TOPK
+from engine.preparation import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, Preparation)
 
 EntryLoader = Callable[[str, int, int], Any]
 
@@ -14,14 +15,6 @@ class FeatureEntry(NamedTuple):
   pitch_i: Tensor
   pitch_v: Tensor
   w2v2: Tensor
-
-class FeatureEntry2(NamedTuple):
-  energy: Tensor
-  mel: Tensor
-  phoneme_i: Tensor
-  phoneme_v: Tensor
-  pitch_i: Tensor
-  pitch_v: Tensor
 
 class FeatureDataset(Dataset):
   def __init__(self, dirs: list[str], frames: int, start_hop: int, random_offset: bool):
@@ -99,14 +92,32 @@ class IntraDomainDataset(Dataset):
 
     return entries
 
-IntraDomainEntry2 = list[FeatureEntry2]
+class IntraDomainDataModule(L.LightningDataModule):
+  # 公式実装では intra_valid からも intra_train の音声を参照用にサンプリングしてる。
+  # TODO: うまくいかなかったら、公式実装と同じ挙動にしてみる。
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4, dataset_class=IntraDomainDataset):
+    super().__init__()
+    self.P = P
+    self.frames = frames
+    self.n_samples = n_samples
+    self.batch_size = batch_size
+    self.num_workers = num_workers
+    self.dataset_class = dataset_class
+    self.intra_train: Any = None
+    self.intra_valid: Any = None
 
-class IntraDomainDataset2(IntraDomainDataset):
-  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry2:
-    return load_feature_entry2(d, start, frames)
+  def setup(self, stage: str):
+    self.P.prepare_feats()
+    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
+    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
+    self.intra_train = self.dataset_class(train_dirs, self.frames, self.frames, self.n_samples, random_offset=True)
+    self.intra_valid = self.dataset_class(valid_dirs, self.frames, self.frames, self.n_samples, random_offset=False)
 
-  def __getitem__(self, index: int) -> IntraDomainEntry2:
-    return super().__getitem__(index)
+  def train_dataloader(self):
+    return DataLoader(self.intra_train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+
+  def val_dataloader(self):
+    return DataLoader(self.intra_valid, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 
 def load_feature_entry(d: str, start: int, frames: int) -> FeatureEntry:
   end = start + frames
@@ -118,14 +129,60 @@ def load_feature_entry(d: str, start: int, frames: int) -> FeatureEntry:
       w2v2=np.array(np.load(d / "w2v2.npy", mmap_mode="r")[start:end]),
   )
 
-def load_feature_entry2(d: str, start: int, frames: int) -> FeatureEntry2:
-  end = start + frames
+class FeatureEntry2(NamedTuple):
+  energy: Tensor
+  mel: Tensor
+  phoneme_i: Tensor
+  phoneme_v: Tensor
+  pitch_i: Tensor
+  pitch_v: Tensor
 
-  return FeatureEntry2(
-      energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
-      mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
-      phoneme_i=np.array(np.load(d / f"phoneme_i_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
-      phoneme_v=np.array(np.load(d / f"phoneme_v_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end]),
-      pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
-      pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
-  )
+IntraDomainEntry2 = list[FeatureEntry2]
+
+class IntraDomainDataset2(IntraDomainDataset):
+  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry2:
+    end = start + frames
+
+    return FeatureEntry2(
+        energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
+        mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
+        phoneme_i=np.array(np.load(d / f"phoneme_i_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
+        phoneme_v=np.array(np.load(d / f"phoneme_v_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end]),
+        pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
+        pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
+    )
+
+  def __getitem__(self, index: int) -> IntraDomainEntry2:
+    return super().__getitem__(index)
+
+class IntraDomainDataModule2(IntraDomainDataModule):
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4):
+    super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset2)
+
+class FeatureEntry3(NamedTuple):
+  energy: Tensor
+  mel: Tensor
+  pitch_i: Tensor
+  pitch_v: Tensor
+  w2v2: Tensor
+
+IntraDomainEntry3 = list[FeatureEntry3]
+
+class IntraDomainDataset3(IntraDomainDataset):
+  def load_entry(self, d: str, start: int, frames: int) -> FeatureEntry3:
+    end = start + frames
+
+    return FeatureEntry3(
+        energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
+        mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
+        pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
+        pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
+        w2v2=np.array(np.load(d / "w2v2.npy", mmap_mode="r")[start:end]),
+    )
+
+  def __getitem__(self, index: int) -> FeatureEntry3:
+    return super().__getitem__(index)
+
+class IntraDomainDataModule3(IntraDomainDataModule):
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4):
+    super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset3)
