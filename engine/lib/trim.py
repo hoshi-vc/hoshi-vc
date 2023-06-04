@@ -26,8 +26,7 @@ def trim_silence(
 ) -> NPArray:
 
   # とりあえず正規化しておく
-  audio = resample(audio, sr, 16000)
-  normalized = librosa.util.normalize(audio)
+  normalized = librosa.util.normalize(resample(audio, sr, 16000))
   conv_sr = lambda frame: clamp(int(frame * sr / 16000), 0, len(audio))
 
   # librosa の trim のコードが使っていた処理でデシベル値を得る。
