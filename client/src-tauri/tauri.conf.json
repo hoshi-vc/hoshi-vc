@@ -7,7 +7,7 @@
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "Hoshi VC",
+    "productName": "Hoshi-VC",
     "version": "0.0.0"
   },
   "tauri": {
@@ -37,7 +37,7 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "Hoshi VC",
+        "title": "Hoshi-VC",
         "width": 800,
         "height": 600
       }

@@ -3,10 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
+    "prepare": "husky install",
     "ncu": "pnpm update --recursive --interactive",
     "ncu:latest": "pnpm update --recursive --interactive --latest"
   },
   "devDependencies": {
+    "husky": "^8.0.3",
     "prettier": "^2.8.8"
   }
 }

@@ -1,17 +1,13 @@
+# Copyright 2023 Hoshi-VC Developer <hoshi-vc@o137.net>.
+#
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# %%
+
 # TODO: 現状、ピッチに依らない表現を獲得できていない。あとでちゃんとやる。
 #       confusion network だけで pitch 情報を取り除くのが難しい気がする。
 #       同一話者、同一発音の別の音声から同じ表現が得られるようなエンコーダーを学習させるとか試す？
-
-# %% [markdown]
-# This notebook (\*.ipynb) was generated from the corresponding python file (\*.py).
-#
-# ## Attempt 02: 音程によらない表現をつかう
-#
-# 先の Attempt 01 では、音程があっていない音声を無理やりつなげているせいでうまくいかないように見えた。
-#
-# なので今度は、音程を調節してから切り貼りするようにしたら良くなるかためしてみる。
-
-# %%
 
 import numpy as np
 import torch

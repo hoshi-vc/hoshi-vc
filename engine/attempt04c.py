@@ -1,11 +1,12 @@
-# %% [markdown]
-# This notebook (\*.ipynb) was generated from the corresponding python file (\*.py).
+# Copyright 2023 Hoshi-VC Developer <hoshi-vc@o137.net>.
 #
-# 各種パラメーターは、モデル定義の `__init__` 内に埋め込むか、あるいは一番下の呼び出し部分で指定するようにしている。
-#
-# 冗長なバケツリレーを避けたいので、モデル定義の `__init__` 内にもマジックナンバーを埋め込むことにした。
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 # %%
+
+# 各種パラメーターは、モデル定義の `__init__` 内に埋め込むか、あるいは一番下の呼び出し部分で指定するようにしている。
+# 冗長なバケツリレーを避けたいので、モデル定義の `__init__` 内にもマジックナンバーを埋め込むことにした。
 
 from pathlib import Path
 from random import Random

@@ -17,6 +17,9 @@
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
+  "[shellscript]": {
+    "editor.defaultFormatter": "foxundermoon.shell-format"
+  },
   "python.formatting.provider": "yapf",
   "typescript.preferences.importModuleSpecifier": "non-relative",
   "files.exclude": {

@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+ROOT="$(dirname -- "$(dirname -- "$0")")"
+. "$ROOT/.venv/bin/activate"
+
+python3 tools/scan_notice.py

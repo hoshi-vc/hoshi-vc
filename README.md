@@ -5,7 +5,7 @@ Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hosh
 
 <br>
 <div align="center">
-  <h1>Hoshi VC</h1>
+  <h1>Hoshi-VC</h1>
   <p>A Personal Experiment in Real-Time Voice Conversion</p>
   <p>学習が高速なリアルタイム声質変換を作ってみる個人的な実験</p>
 </div>
@@ -93,3 +93,7 @@ FastSpeech2 をベースにして声質変換を試みたときと比べて、�
 - [FragmentVC](https://arxiv.org/abs/2010.14150) (inspired me to use a similarity search)
 
 <!-- TODO: Comprehensive list of references. -->
+
+## License
+
+The code in this repository is licensed under the [Mozilla Public License 2.0](LICENSE).
