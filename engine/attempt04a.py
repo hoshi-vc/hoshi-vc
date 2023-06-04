@@ -159,7 +159,6 @@ class VCModule(L.LightningModule):
     super().__init__()
     self.model = VCModel(hdim=hdim)
     self.club = CLUBSample(xdim=hdim, ydim=hdim // 4, hdim=hdim)
-    self.club_probe = CLUBSample(xdim=hdim, ydim=hdim // 4, hdim=hdim)
 
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
@@ -218,12 +217,9 @@ class VCModule(L.LightningModule):
     loss_mi = self.club(club_x, club_y)
     loss_club = self.club.learning_loss(club_x, club_y)
 
-    loss_mi_probe = self.club_probe(club_x, club_y)
-    loss_club_probe = self.club_probe.learning_loss(club_x, club_y)
-
     loss_model = loss_reconst + loss_mi
 
-    return y_hat, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe)
+    return y_hat, (loss_model, loss_club), (loss_reconst, loss_mi)
 
   def training_step(self, batch: IntraDomainEntry2, batch_idx: int):
     step = self.batches_that_stepped()
@@ -239,15 +235,15 @@ class VCModule(L.LightningModule):
     # referenced: https://github.com/Wendison/VQMIVC/blob/851b4f5ca5bb60c11fea6a618affeb4979b17cf3/train.py#L27
 
     self.toggle_optimizer(opt_club)
-    _, (_, loss_club, loss_club_probe), _ = self._process_batch(batch, self_exclude, ref_included)
+    _, (_, loss_club), _ = self._process_batch(batch, self_exclude, ref_included)
     opt_club.zero_grad()
-    self.manual_backward(loss_club + loss_club_probe)
+    self.manual_backward(loss_club)
     opt_club.step()
     sch_club.step()
     self.untoggle_optimizer(opt_club)
 
     self.toggle_optimizer(opt_model)
-    _, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe) = self._process_batch(batch, self_exclude, ref_included)
+    _, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_exclude, ref_included)
     opt_model.zero_grad()
     self.manual_backward(loss_model)
     opt_model.step()
@@ -256,10 +252,8 @@ class VCModule(L.LightningModule):
 
     self.log("train_loss", loss_model)
     self.log("train_loss_club", loss_club)
-    self.log("train_loss_club_probe", loss_club_probe)
     self.log("train_loss_reconst", loss_reconst)
     self.log("train_loss_mi", loss_mi)
-    self.log("train_loss_mi_probe", loss_mi_probe)
     self.log("self_exclude_rate", self_exclude)
     self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
@@ -267,14 +261,12 @@ class VCModule(L.LightningModule):
 
   def validation_step(self, batch: IntraDomainEntry2, batch_idx: int):
     y = batch[0].mel
-    y_hat, (loss_model, loss_club, loss_club_probe), (loss_reconst, loss_mi, loss_mi_probe) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
+    y_hat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
 
     self.log("valid_loss", loss_model)
     self.log("valid_loss_club", loss_club)
-    self.log("valid_loss_club_probe", loss_club_probe)
     self.log("valid_loss_reconst", loss_reconst)
     self.log("valid_loss_mi", loss_mi)
-    self.log("valid_loss_mi_probe", loss_mi_probe)
 
     if batch_idx == 0:
       names = [f"{i:02d}" for i in range(4)]
@@ -285,7 +277,7 @@ class VCModule(L.LightningModule):
 
   def configure_optimizers(self):
     opt_model = AdamW(self.model.parameters(), lr=self.lr)
-    opt_club = AdamW([*self.club.parameters(), *self.club_probe.parameters()], lr=self.lr_club)
+    opt_club = AdamW(self.club.parameters(), lr=self.lr_club)
     sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
     sch_club = S.ConstantLR(opt_club, 1.0)
 
