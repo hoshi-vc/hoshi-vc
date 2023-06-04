@@ -77,17 +77,17 @@ FastSpeech2 をベースにして声質変換を試みたときと比べて、�
 
 <!-- - モデルの構造に FastSpeech2 の構造をつかってみる -->
 <!-- - (ログ出力に attention map も追加する) -->
-<!-- - (前処理を追加する) -->
 
 <!-- TODO: Write more details, results, observations, and conclusions. -->
 
 ## 参考にしたものなど
 
 - [Faiss](https://github.com/facebookresearch/faiss) (efficient similarity search)
+- [CLUB](https://arxiv.org/abs/2006.12013) (information bottleneck)
 - [wav2vec 2.0](https://arxiv.org/abs/2006.11477) (phonetic feature extraction)
 - [CREPE](https://arxiv.org/abs/1802.06182) (pitch estimation)
 - [AdaSpeech](https://arxiv.org/abs/2103.00993) (conditional layer normalization)
-- [HiFi-GAN](https://github.com/jik876/hifi-gan) (audio waveform generation)
+- [HiFi-GAN](https://arxiv.org/abs/2010.05646) (audio waveform generation)
 - [JVS corpus](https://arxiv.org/abs/1908.06248) (free multi-speaker voice corpus)
 - [FastSpeech 2](https://arxiv.org/abs/2006.04558), [FastPitch](https://arxiv.org/abs/2006.06873) (introduced me to the world of voice conversion)
 - [FragmentVC](https://arxiv.org/abs/2010.14150) (inspired me to use a similarity search)

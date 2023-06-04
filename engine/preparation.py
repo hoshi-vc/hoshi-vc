@@ -4,12 +4,15 @@ from functools import cached_property
 from pathlib import Path
 
 import faiss
+import librosa
 import numpy as np
+import torch
 from autofaiss import build_index
 from tqdm import tqdm
 
 from engine.lib.dataset_jvs import JVS, JVSCategory
 from engine.lib.extract import (Phoneme, Wav2Vec2, extract_energy, extract_melspec, extract_pitch_matrix, extract_pitch_topk)
+from engine.lib.trim import trim_silence
 from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
 
@@ -18,7 +21,7 @@ CREPE_MODEL = "tiny"
 
 PHONEME_TOPK = 8
 
-FEATS_DIR = DATA_DIR / "attempt01" / "feats"
+FEATS_DIR = DATA_DIR / "feats"
 FAISS_DIR = DATA_DIR / "attempt01" / "faiss"
 
 class Preparation:
@@ -85,8 +88,14 @@ class Preparation:
         for i in tqdm(target_i, desc=f"Processing {speaker_id}", ncols=0):
           item = self.dataset[i]
 
-          # Extract features
+          # normalize
           audio, sr = item.audio[0], item.sr
+          audio = audio.numpy()
+          audio = trim_silence(audio, sr)
+          audio = librosa.util.normalize(audio)
+          audio = torch.as_tensor(audio)
+
+          # extract features
           mel = self.extract_melspec(audio, sr)
           energy = self.extract_energy(audio, sr)
           w2v2 = self.extract_wav2vec2(audio, sr)
@@ -120,7 +129,7 @@ class Preparation:
 
           assert mel.shape[0] == energy.shape[0] == w2v2.shape[0] == phoneme_i.shape[0] == phoneme_v.shape[0] == pitch_i.shape[0] == pitch_v.shape[0]
 
-          # Append to storage
+          # append to storage
           mel_list.append(mel)
           energy_list.append(energy)
           w2v2_list.append(w2v2)
