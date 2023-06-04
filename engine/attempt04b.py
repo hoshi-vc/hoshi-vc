@@ -205,7 +205,6 @@ class VCModule(L.LightningModule):
 
     club_x = ref_value
     club_y = torch.cat([o.pitch_i for o in refs], dim=1)[:, :, 0]
-    # club_y = ref_pitch.detach()
 
     loss_reconst = F.l1_loss(y_hat, y)
     loss_mi = self.club(club_x, club_y)

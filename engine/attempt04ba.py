@@ -146,20 +146,18 @@ class VCModel(nn.Module):
     # shape: (batch, src_len, 80)
     tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
 
-    return tgt_mel, (ref_key, ref_value, ref_pitch)
+    return tgt_mel, (ref_key, ref_value)
 
 class VCModule(L.LightningModule):
-  def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
+  def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int, int]):
     super().__init__()
     self.model = VCModel(hdim=hdim)
     self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim)
-    self.club_sp = CLUBSampleForCategorical(xdim=hdim, ynum=len(P.dataset.speaker_ids), hdim=hdim)
 
     self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
-    self.exclusive_rate = exclusive_rate
     self.lr = lr
     self.lr_club = lr_club
 
@@ -179,54 +177,57 @@ class VCModule(L.LightningModule):
     wandb_logger: Run = self.logger.experiment
     wandb_logger.log(item, step=self.batches_that_stepped())
 
-  def _process_batch(self, batch: IntraDomainEntry3, self_exclude: float, ref_included: bool):
-    src = batch[0]
+  def _process_batch(self, batch: IntraDomainEntry3, self_ratio: float, ref_ratio: float):
+    src, refs = batch[0], batch[1:]
 
-    refs = [src]
-    if ref_included:
-      if self.batch_rand.random() >= self_exclude:
-        refs = batch
-      else:
-        refs = batch[1:]
+    base_len = src.mel.shape[1]
+    n_refs = len(refs)
+    s_len = int(base_len * self_ratio)
+    r_len = int(base_len * n_refs * ref_ratio)
+    rs = self.batch_rand.randint(0, base_len * n_refs - r_len)
+    re = rs + r_len
+
+    # yapf: disable
+    ref_energy= torch.cat([ src.energy[:, :s_len, :], torch.cat([ o.energy for o in refs], dim=1)[:, rs:re, :]], dim=1)
+    ref_w2v2=   torch.cat([   src.w2v2[:, :s_len, :], torch.cat([   o.w2v2 for o in refs], dim=1)[:, rs:re, :]], dim=1)
+    ref_pitch_i=torch.cat([src.pitch_i[:, :s_len, :], torch.cat([o.pitch_i for o in refs], dim=1)[:, rs:re, :]], dim=1)
+    ref_mel=    torch.cat([    src.mel[:, :s_len, :], torch.cat([    o.mel for o in refs], dim=1)[:, rs:re, :]], dim=1)
+    # yapf: enable
 
     y = src.mel
     y_hat: Tensor
-    y_hat, (ref_key, ref_value, ref_pitch) = self.model(
+    y_hat, (ref_key, ref_value) = self.model(
         Input04(
             src_energy=src.energy,
             src_w2v2=src.w2v2,
             src_pitch_i=src.pitch_i,
-            ref_energy=torch.cat([o.energy for o in refs], dim=1),
-            ref_w2v2=torch.cat([o.w2v2 for o in refs], dim=1),
-            ref_pitch_i=torch.cat([o.pitch_i for o in refs], dim=1),
-            ref_mel=torch.cat([o.mel for o in refs], dim=1),
+            ref_energy=ref_energy,
+            ref_w2v2=ref_w2v2,
+            ref_pitch_i=ref_pitch_i,
+            ref_mel=ref_mel,
         ))
 
     assert y.shape == y_hat.shape
 
     club_x = ref_value
-    club_y = torch.cat([o.pitch_i for o in refs], dim=1)[:, :, 0]
-
-    club_sp_x = ref_key
-    club_sp_y = src.speaker.repeat(1, ref_key.shape[1])
-    club_sp_n = src.speaker[torch.randperm(src.speaker.shape[0])].repeat(1, ref_key.shape[1])
+    club_y = ref_pitch_i[:, :, 0]
 
     loss_reconst = F.l1_loss(y_hat, y)
     loss_mi = self.club(club_x, club_y)
     loss_club = self.club.learning_loss(club_x, club_y)
-    loss_mi_sp = self.club_sp(club_sp_x, club_sp_y, club_sp_n)
-    loss_club_sp = self.club_sp.learning_loss(club_sp_x, club_sp_y)
 
-    loss_model = loss_reconst + loss_mi + loss_mi_sp
+    # loss_model = loss_reconst + loss_mi
+    loss_model = loss_reconst
 
-    return y_hat, (loss_model, loss_club, loss_club_sp), (loss_reconst, loss_mi, loss_mi_sp)
+    return y_hat, (loss_model, loss_club), (loss_reconst, loss_mi)
 
   def training_step(self, batch: IntraDomainEntry3, batch_idx: int):
     step = self.batches_that_stepped()
     milestones = self.milestones
-    milestone_progress = (step - milestones[0]) / (milestones[1] - milestones[0])
-    self_exclude = clamp(milestone_progress, 0.0, 1.0) * self.exclusive_rate
-    ref_included = step >= milestones[0]
+    progress1 = (step - milestones[0]) / (milestones[1] - milestones[0])
+    progress2 = (step - milestones[1]) / (milestones[2] - milestones[1])
+    ref_ratio = clamp(progress1, 0.0, 1.0)
+    self_ratio = 1 - clamp(progress2, 0.0, 1.0)
 
     opt_model, opt_club = self.optimizers()
     sch_model, sch_club = self.lr_schedulers()
@@ -235,15 +236,15 @@ class VCModule(L.LightningModule):
     # referenced: https://github.com/Wendison/VQMIVC/blob/851b4f5ca5bb60c11fea6a618affeb4979b17cf3/train.py#L27
 
     self.toggle_optimizer(opt_club)
-    _, (_, loss_club, loss_club_sp), _ = self._process_batch(batch, self_exclude, ref_included)
+    _, (_, loss_club), _ = self._process_batch(batch, self_ratio, ref_ratio)
     opt_club.zero_grad()
-    self.manual_backward(loss_club + loss_club_sp)
+    self.manual_backward(loss_club)
     opt_club.step()
     sch_club.step()
     self.untoggle_optimizer(opt_club)
 
     self.toggle_optimizer(opt_model)
-    _, (loss_model, loss_club, loss_club_sp), (loss_reconst, loss_mi, loss_mi_sp) = self._process_batch(batch, self_exclude, ref_included)
+    _, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio, ref_ratio)
     opt_model.zero_grad()
     self.manual_backward(loss_model)
     opt_model.step()
@@ -252,25 +253,22 @@ class VCModule(L.LightningModule):
 
     self.log("train_loss", loss_model)
     self.log("train_loss_club", loss_club)
-    self.log("train_loss_club_sp", loss_club_sp)
     self.log("train_loss_reconst", loss_reconst)
     self.log("train_loss_mi", loss_mi)
-    self.log("train_loss_mi_sp", loss_mi_sp)
-    self.log("self_exclude_rate", self_exclude)
+    self.log("self_ratio", self_ratio)
+    self.log("ref_ratio", ref_ratio)
     self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
     return loss_model
 
   def validation_step(self, batch: IntraDomainEntry3, batch_idx: int):
     y = batch[0].mel
-    y_hat, (loss_model, loss_club, loss_club_sp), (loss_reconst, loss_mi, loss_mi_sp) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
+    y_hat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
 
     self.log("valid_loss", loss_model)
     self.log("valid_loss_club", loss_club)
-    self.log("valid_loss_club_sp", loss_club_sp)
     self.log("valid_loss_reconst", loss_reconst)
     self.log("valid_loss_mi", loss_mi)
-    self.log("valid_loss_mi_sp", loss_mi_sp)
 
     if batch_idx == 0:
       names = [f"{i:02d}" for i in range(4)]
@@ -281,7 +279,7 @@ class VCModule(L.LightningModule):
 
   def configure_optimizers(self):
     opt_model = AdamW(self.model.parameters(), lr=self.lr)
-    opt_club = AdamW([*self.club.parameters(), *self.club_sp.parameters()], lr=self.lr_club)
+    opt_club = AdamW(self.club.parameters(), lr=self.lr_club)
     sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
     sch_club = S.ConstantLR(opt_club, 1.0)
 
@@ -290,7 +288,7 @@ class VCModule(L.LightningModule):
 if __name__ == "__main__":
 
   PROJECT = Path(__file__).stem
-  assert PROJECT == "attempt04c"
+  assert PROJECT == "attempt04ba"
   PROJECT = "attempt04"
 
   setup_train_environment()
@@ -305,8 +303,7 @@ if __name__ == "__main__":
       lr_club=5e-3,
       warmup_steps=500,
       total_steps=50000,
-      milestones=(5000, 10000),
-      exclusive_rate=1.0,
+      milestones=(2000, 6000, 16000),
   )
 
   wandb_logger = new_wandb_logger(PROJECT)

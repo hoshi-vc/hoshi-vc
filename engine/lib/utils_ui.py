@@ -37,16 +37,16 @@ def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin"):
   fig.colorbar(im, ax=axs)
   plt.show(block=False)
 
-def play_audio(audio: Tensor, sr: int):
+def play_audio(audio: Tensor, sr: int, normalize=False):
   audio = audio.cpu().numpy()
 
   if audio.ndim == 1: audio = audio[None, :]
 
   num_channels, _ = audio.shape
   if num_channels == 1:
-    display(Audio(audio[0], rate=sr))
+    display(Audio(audio[0], rate=sr, normalize=normalize))
   elif num_channels == 2:
-    display(Audio((audio[0], audio[1]), rate=sr))
+    display(Audio((audio[0], audio[1]), rate=sr, normalize=normalize))
   else:
     raise ValueError("Waveform with more than 2 channels are not supported.")
 
