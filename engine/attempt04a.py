@@ -281,7 +281,7 @@ class VCModule(L.LightningModule):
     opt_model = AdamW(self.model.parameters(), lr=self.lr)
     opt_club = AdamW(self.club.parameters(), lr=self.lr_club)
     sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
-    sch_club = S.ConstantLR(opt_club, 1.0)
+    sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
 
     return [opt_model, opt_club], [sch_model, sch_club]
 
