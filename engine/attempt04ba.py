@@ -149,10 +149,10 @@ class VCModel(nn.Module):
     return tgt_mel, (ref_key, ref_value)
 
 class VCModule(L.LightningModule):
-  def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int, int]):
+  def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int, int, int], grad_clip: float):
     super().__init__()
     self.model = VCModel(hdim=hdim)
-    self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim)
+    self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
 
     self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
@@ -160,6 +160,7 @@ class VCModule(L.LightningModule):
     self.milestones = milestones
     self.lr = lr
     self.lr_club = lr_club
+    self.grad_clip = grad_clip
 
     self.save_hyperparameters()
 
@@ -225,7 +226,7 @@ class VCModule(L.LightningModule):
     step = self.batches_that_stepped()
     milestones = self.milestones
     progress1 = (step - milestones[0]) / (milestones[1] - milestones[0])
-    progress2 = (step - milestones[1]) / (milestones[2] - milestones[1])
+    progress2 = (step - milestones[2]) / (milestones[3] - milestones[2])
     ref_ratio = clamp(progress1, 0.0, 1.0)
     self_ratio = 1 - clamp(progress2, 0.0, 1.0)
 
@@ -238,6 +239,7 @@ class VCModule(L.LightningModule):
     self.toggle_optimizer(opt_club)
     _, (_, loss_club), _ = self._process_batch(batch, self_ratio, ref_ratio)
     opt_club.zero_grad()
+    self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
     self.manual_backward(loss_club)
     opt_club.step()
     sch_club.step()
@@ -247,14 +249,15 @@ class VCModule(L.LightningModule):
     _, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio, ref_ratio)
     opt_model.zero_grad()
     self.manual_backward(loss_model)
+    self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
     opt_model.step()
     sch_model.step()
     self.untoggle_optimizer(opt_model)
 
     self.log("train_loss", loss_model)
     self.log("train_loss_club", loss_club)
-    self.log("train_loss_reconst", loss_reconst)
-    self.log("train_loss_mi", loss_mi)
+    self.log("train_reconst", loss_reconst)
+    self.log("train_mi", loss_mi)
     self.log("self_ratio", self_ratio)
     self.log("ref_ratio", ref_ratio)
     self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
@@ -263,17 +266,26 @@ class VCModule(L.LightningModule):
 
   def validation_step(self, batch: IntraDomainEntry3, batch_idx: int):
     y = batch[0].mel
+
+    y_hat_cheat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0)
+
+    # vcheat: validation with cheating
+    self.log("vcheat_loss", loss_model)
+    self.log("vcheat_loss_club", loss_club)
+    self.log("vcheat_reconst", loss_reconst)
+    self.log("vcheat_mi", loss_mi)
+
     y_hat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
 
     self.log("valid_loss", loss_model)
     self.log("valid_loss_club", loss_club)
-    self.log("valid_loss_reconst", loss_reconst)
-    self.log("valid_loss_mi", loss_mi)
+    self.log("valid_reconst", loss_reconst)
+    self.log("valid_mi", loss_mi)
 
     if batch_idx == 0:
       names = [f"{i:02d}" for i in range(4)]
-      log_spectrograms(self, names, y, y_hat)
-      log_audios(self, P, names, y, y_hat)
+      log_spectrograms(self, names, y, y_hat, y_hat_cheat)
+      log_audios(self, P, names, y, y_hat, y_hat_cheat)
 
     return loss_model
 
@@ -295,21 +307,24 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule3(P, frames=256, n_samples=3, batch_size=8)
+  datamodule = IntraDomainDataModule3(P, frames=256, n_samples=15, batch_size=16)
+
+  total_steps = 10000
 
   model = VCModule(
       hdim=512,
       lr=1e-3,
       lr_club=5e-3,
       warmup_steps=500,
-      total_steps=50000,
-      milestones=(2000, 6000, 16000),
+      total_steps=total_steps,
+      milestones=(0, 1, 0, 1),
+      grad_clip=1.0,
   )
 
   wandb_logger = new_wandb_logger(PROJECT)
 
   trainer = L.Trainer(
-      max_steps=model.total_steps,
+      max_steps=total_steps * 2,  # optimizer を二回呼ぶので
       logger=wandb_logger,
       callbacks=[
           new_checkpoint_callback_wandb(PROJECT, wandb_logger),
