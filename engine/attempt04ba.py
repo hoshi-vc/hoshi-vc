@@ -56,7 +56,7 @@ class VCModel(nn.Module):
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(energy_dim + pitch_dim + w2v2_dim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + w2v2_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -75,7 +75,7 @@ class VCModel(nn.Module):
     self.encode_value = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(energy_dim + mel_dim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + pitch_dim + mel_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -113,10 +113,10 @@ class VCModel(nn.Module):
     return self.mel_encode(mel)
 
   def forward_key(self, energy: Tensor, pitch: Tensor, w2v2: Tensor):
-    return self.encode_key(torch.cat([energy, pitch, w2v2], dim=-1))
+    return self.encode_key(torch.cat([energy, w2v2], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
-    return self.encode_value(torch.cat([energy, mel], dim=-1))
+    return self.encode_value(torch.cat([energy, pitch, mel], dim=-1))
 
   def forward(self, o: Input04):
 
@@ -152,7 +152,8 @@ class VCModule(L.LightningModule):
   def __init__(self, hdim: int, lr: float, lr_club: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int, int, int], grad_clip: float):
     super().__init__()
     self.model = VCModel(hdim=hdim)
-    self.club = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
+    self.club_val = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
+    self.club_key = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
 
     self.batch_rand = Random(94324203)
     self.warmup_steps = warmup_steps
@@ -210,17 +211,21 @@ class VCModule(L.LightningModule):
 
     assert y.shape == y_hat.shape
 
-    club_x = ref_value
+    club_x_val = ref_value
+    club_x_key = ref_key
     club_y = ref_pitch_i[:, :, 0]
 
-    loss_reconst = F.l1_loss(y_hat, y)
-    loss_mi = self.club(club_x, club_y)
-    loss_club = self.club.learning_loss(club_x, club_y)
+    reconst = F.l1_loss(y_hat, y)
 
-    # loss_model = loss_reconst + loss_mi
-    loss_model = loss_reconst
+    mi_val = self.club_val(club_x_val, club_y)
+    mi_key = self.club_key(club_x_key, club_y)
 
-    return y_hat, (loss_model, loss_club), (loss_reconst, loss_mi)
+    club_val = self.club_val.learning_loss(club_x_val, club_y)
+    club_key = self.club_key.learning_loss(club_x_key, club_y)
+
+    loss_model = reconst + mi_key
+
+    return y_hat, (loss_model, club_val, club_key), (reconst, mi_val, mi_key)
 
   def training_step(self, batch: IntraDomainEntry3, batch_idx: int):
     step = self.batches_that_stepped()
@@ -237,16 +242,16 @@ class VCModule(L.LightningModule):
     # referenced: https://github.com/Wendison/VQMIVC/blob/851b4f5ca5bb60c11fea6a618affeb4979b17cf3/train.py#L27
 
     self.toggle_optimizer(opt_club)
-    _, (_, loss_club), _ = self._process_batch(batch, self_ratio, ref_ratio)
+    _, (_, club_val, club_key), _ = self._process_batch(batch, self_ratio, ref_ratio)
     opt_club.zero_grad()
     self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
-    self.manual_backward(loss_club)
+    self.manual_backward(club_val + club_key)
     opt_club.step()
     sch_club.step()
     self.untoggle_optimizer(opt_club)
 
     self.toggle_optimizer(opt_model)
-    _, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio, ref_ratio)
+    _, (loss_model, club_val, club_key), (reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio, ref_ratio)
     opt_model.zero_grad()
     self.manual_backward(loss_model)
     self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
@@ -255,9 +260,11 @@ class VCModule(L.LightningModule):
     self.untoggle_optimizer(opt_model)
 
     self.log("train_loss", loss_model)
-    self.log("train_loss_club", loss_club)
-    self.log("train_reconst", loss_reconst)
-    self.log("train_mi", loss_mi)
+    self.log("train_loss_club_val", club_val)
+    self.log("train_loss_club_key", club_key)
+    self.log("train_reconst", reconst)
+    self.log("train_mi_val", mi_val)
+    self.log("train_mi_key", mi_key)
     self.log("self_ratio", self_ratio)
     self.log("ref_ratio", ref_ratio)
     self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
@@ -267,20 +274,24 @@ class VCModule(L.LightningModule):
   def validation_step(self, batch: IntraDomainEntry3, batch_idx: int):
     y = batch[0].mel
 
-    y_hat_cheat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0)
+    y_hat_cheat, (loss_model, club_val, club_key), (loss_reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0)
 
     # vcheat: validation with cheating
     self.log("vcheat_loss", loss_model)
-    self.log("vcheat_loss_club", loss_club)
+    self.log("vcheat_loss_club_val", club_val)
+    self.log("vcheat_loss_club_key", club_key)
     self.log("vcheat_reconst", loss_reconst)
-    self.log("vcheat_mi", loss_mi)
+    self.log("vcheat_mi_val", mi_val)
+    self.log("vcheat_mi_key", mi_key)
 
-    y_hat, (loss_model, loss_club), (loss_reconst, loss_mi) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
+    y_hat, (loss_model, club_val, club_key), (loss_reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
 
     self.log("valid_loss", loss_model)
-    self.log("valid_loss_club", loss_club)
+    self.log("valid_loss_club_val", club_val)
+    self.log("valid_loss_club_key", club_key)
     self.log("valid_reconst", loss_reconst)
-    self.log("valid_mi", loss_mi)
+    self.log("valid_mi_val", mi_val)
+    self.log("valid_mi_key", mi_key)
 
     if batch_idx == 0:
       names = [f"{i:02d}" for i in range(4)]
@@ -291,7 +302,7 @@ class VCModule(L.LightningModule):
 
   def configure_optimizers(self):
     opt_model = AdamW(self.model.parameters(), lr=self.lr)
-    opt_club = AdamW(self.club.parameters(), lr=self.lr_club)
+    opt_club = AdamW([*self.club_val.parameters(), *self.club_key.parameters()], lr=self.lr_club)
     sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
 
@@ -317,7 +328,7 @@ if __name__ == "__main__":
       lr_club=5e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 0, 1),
+      milestones=(0, 1, 4000, 4001),
       grad_clip=1.0,
   )
 
