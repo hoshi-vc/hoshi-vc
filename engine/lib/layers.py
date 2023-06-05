@@ -61,6 +61,12 @@ class Buckets(nn.Module):
   def forward(self, o: Tensor):
     return torch.bucketize(o, self.bins)
 
+# NOTE
+# プロファイリングしたら randperm に相当な時間（全体の 30% ）がかかってた。
+# より高速な randint で代用しようと思ったけど、一番下の toy example でもすでに結果が違ってたから大丈夫かわからん。
+# まぁ、推定された MI の値は異なるけど MI と比例してる感じだったから大丈夫かな？
+# 論文 (Section 3.3) でも "we randomly sample a negative pair (xi, yki) [...], with ki uniformly selected from indices {1, 2, ... , N}." って言ってるし。
+
 # CLUB: A Contrastive Log-ratio Upper Bound of Mutual Information
 # Paper: https://arxiv.org/abs/2006.12013
 # Code:  https://github.com/Linear95/CLUB
@@ -71,7 +77,7 @@ class CLUBSampleInSeq(nn.Module):
   xs: (batch, samples, xdim)
   ys: (batch, samples, ydim)
   """
-  def __init__(self, xdim: int, ydim: int, hdim: int):
+  def __init__(self, xdim: int, ydim: int, hdim: int, fast_sampling=False):
     super().__init__()
     hdim = hdim // 2
     self.mu = nn.Sequential(
@@ -89,13 +95,19 @@ class CLUBSampleInSeq(nn.Module):
         nn.Linear(hdim, ydim),
         nn.Tanh(),
     )
+    self.fast_sampling = fast_sampling
 
   def _sample_negatives(self, xs: Tensor, ys: Tensor):
     # それぞれの x に対してランダムに一つの y を選ぶ
     # このとき、同じシーケンス内から取ってくるようにする
     # 実装しやすいから、バッチ内の異なるシーケンスでも x, y のインデックスの対応は共通にしたけど多分大丈夫でしょ！
     # 長い音声からランダムな場所を切り抜いてデータセット作ってるし。
-    return ys[:, torch.randperm(xs.shape[1]), :]
+    size = xs.shape[1]
+    if self.fast_sampling:
+      random_index = torch.randint(size, (size,), device=xs.device).long()
+    else:
+      random_index = torch.randperm(size)
+    return ys[:, random_index, :]
 
   def log_likelihood(self, xs: Tensor, ys: Tensor):
     mu = self.mu(xs)
@@ -125,7 +137,12 @@ class CLUBSample(CLUBSampleInSeq):
   ys: (...samples, ydim)
   """
   def _sample_negatives(self, xs: Tensor, ys: Tensor):
-    return ys[torch.randperm(xs.shape[0])]
+    size = xs.shape[0]
+    if self.fast_sampling:
+      random_index = torch.randint(size, (size,), device=xs.device).long()
+    else:
+      random_index = torch.randperm(size)
+    return ys[random_index]
 
   def log_likelihood(self, xs: Tensor, ys: Tensor):
     xs = xs.reshape(-1, xs.shape[-1])
@@ -142,7 +159,7 @@ class CLUBSampleForCategorical(nn.Module):
   xs: (...samples, xdim)
   ys: (...samples,)
   '''
-  def __init__(self, xdim: int, ynum: int, hdim: int):
+  def __init__(self, xdim: int, ynum: int, hdim: int, fast_sampling=False):
     super().__init__()
 
     self.ynum = ynum
@@ -153,9 +170,15 @@ class CLUBSampleForCategorical(nn.Module):
         nn.ReLU(),
         nn.Linear(hdim, ynum),
     )
+    self.fast_sampling = fast_sampling
 
   def _sample_negatives(self, xs: Tensor, ys: Tensor):
-    return ys[torch.randperm(xs.shape[0])]
+    size = xs.shape[0]
+    if self.fast_sampling:
+      random_index = torch.randint(size, (size,), device=xs.device).long()
+    else:
+      random_index = torch.randperm(size)
+    return ys[random_index]
 
   def log_likelihood(self, xs: Tensor, ys: Tensor):
     xs = xs.reshape(-1, xs.shape[-1])
