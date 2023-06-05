@@ -19,7 +19,7 @@ from engine.dataset_feats import IntraDomainDataModule, IntraDomainEntry
 from engine.fragment_vc.models import FragmentVC
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.lib.utils import clamp
-from engine.preparation import Preparation
+from engine.prepare import Preparation
 from engine.utils import (log_spectrograms, new_checkpoint_callback, new_wandb_logger, setup_train_environment)
 
 # Pytorch Lightning

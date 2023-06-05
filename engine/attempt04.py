@@ -25,7 +25,7 @@ from engine.dataset_feats import IntraDomainDataModule2, IntraDomainEntry2
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import clamp
-from engine.preparation import Preparation
+from engine.prepare import Preparation
 from engine.utils import (log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class Input04(NamedTuple):
@@ -59,10 +59,10 @@ class VCModel(nn.Module):
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        nn.RNN(hdim, hdim, batch_first=True),
-        GetNth(0),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
+        # nn.RNN(hdim, hdim, batch_first=True),
+        # GetNth(0),
+        # nn.ReLU(),
+        # nn.LayerNorm(hdim),
         Transpose(1, 2),
         nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),

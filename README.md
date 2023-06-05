@@ -34,7 +34,7 @@ pnpm install
 
 # Now you are ready to go!
 source .venv/bin/activate
-python engine/hello.py
+python engine/prepare.py
 ```
 
 <!-- TODO: 環境構築の方法だけじゃなくて、学習の走らせ方などまで書きたい。 -->

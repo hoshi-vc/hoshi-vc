@@ -223,6 +223,8 @@ if __name__ == "__main__":
   P.prepare_feats()
   P.prepare_faiss()
 
+def check_feats():
+  pass
   # %%
   # ちゃんと特徴たちがアラインしているかを目視で確認したくて書いた
 

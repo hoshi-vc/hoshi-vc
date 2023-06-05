@@ -130,7 +130,7 @@ def extract_pitch_topk(audio: Tensor, sr: int, model: str, topk: int, device: De
 if __name__ == "__main__":
   from tqdm import tqdm
 
-  from engine.preparation import Preparation
+  from engine.prepare import Preparation
 
   device = "cuda"
   P = Preparation(device)

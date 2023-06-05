@@ -16,7 +16,7 @@ from torch import Tensor
 
 from engine.lib.utils import DATA_DIR
 from engine.lib.utils_ui import plot_spectrograms
-from engine.preparation import Preparation
+from engine.prepare import Preparation
 
 def setup_train_environment():
   seed_everything(90212374, workers=True)

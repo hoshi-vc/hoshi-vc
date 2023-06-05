@@ -17,7 +17,7 @@ import torch
 
 from engine.lib.utils import NPArray
 from engine.lib.utils_ui import play_audio, plot_spectrogram
-from engine.preparation import Preparation
+from engine.prepare import Preparation
 
 device = "cuda"
 
