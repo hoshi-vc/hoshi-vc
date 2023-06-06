@@ -26,7 +26,7 @@ from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import clamp
 from engine.prepare import Preparation
-from engine.utils import (log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
+from engine.utils import (log_audios, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class Input04(NamedTuple):
   src_energy: Tensor  #    (batch, src_len, 1)
@@ -47,22 +47,24 @@ class VCModel(nn.Module):
 
     energy_dim = hdim // 4
     pitch_dim = hdim // 4
-    others_dim = hdim - energy_dim - pitch_dim
+    phoneme_dim = hdim // 2
+    mel_dim = hdim // 2
+
     self.energy_bins = Buckets(-11.0, -3.0, 128)
     self.energy_embed = nn.Embedding(128, energy_dim)
     self.pitch_embed = nn.Embedding(360, pitch_dim)
-    self.phoneme_embed = nn.Embedding(400, others_dim)
+    self.phoneme_embed = nn.Embedding(400, phoneme_dim)
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + pitch_dim + phoneme_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        # nn.RNN(hdim, hdim, batch_first=True),
-        # GetNth(0),
-        # nn.ReLU(),
-        # nn.LayerNorm(hdim),
+        nn.RNN(hdim, hdim, batch_first=True),
+        GetNth(0),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
         Transpose(1, 2),
         nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),
@@ -70,11 +72,11 @@ class VCModel(nn.Module):
         nn.LayerNorm(hdim),
     )
 
-    self.mel_encode = nn.Linear(80, others_dim)
+    self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + pitch_dim + mel_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -153,7 +155,7 @@ class VCModel(nn.Module):
     return tgt_mel, (ref_key, ref_value)
 
 class VCModule(L.LightningModule):
-  def __init__(self, hdim: int, lr: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int], exclusive_rate: float):
+  def __init__(self, hdim: int, lr: float, warmup_steps: int, total_steps: int, milestones: tuple[int, int]):
     super().__init__()
     self.model = VCModel(hdim=hdim)
 
@@ -161,7 +163,6 @@ class VCModule(L.LightningModule):
     self.warmup_steps = warmup_steps
     self.total_steps = total_steps
     self.milestones = milestones
-    self.exclusive_rate = exclusive_rate
     self.lr = lr
 
     self.save_hyperparameters()
@@ -175,15 +176,13 @@ class VCModule(L.LightningModule):
     wandb_logger: Run = self.logger.experiment
     wandb_logger.log(item, step=self.batches_that_stepped())
 
-  def _process_batch(self, batch: IntraDomainEntry2, self_exclude: float, ref_included: bool):
+  def _process_batch(self, batch: IntraDomainEntry2, self_exclude: float):
     src = batch[0]
 
-    refs = [src]
-    if ref_included:
-      if self.batch_rand.random() >= self_exclude:
-        refs = batch
-      else:
-        refs = batch[1:]
+    if self.batch_rand.random() >= self_exclude:
+      refs = batch
+    else:
+      refs = batch[1:]
 
     y = src.mel
     y_hat: Tensor
@@ -202,45 +201,50 @@ class VCModule(L.LightningModule):
 
     assert y.shape == y_hat.shape
 
-    loss_reconst = F.l1_loss(y_hat, y)
-    # loss_kv = F.l1_loss(ref_key, ref_value.detach())
+    reconst = F.l1_loss(y_hat, y)
 
-    loss = loss_reconst
+    loss_model = reconst
 
-    return y_hat, loss, (loss_reconst,)
+    return y_hat, loss_model, (reconst,)
 
   def training_step(self, batch: IntraDomainEntry2, batch_idx: int):
     step = self.batches_that_stepped()
     milestones = self.milestones
-    milestone_progress = (step - milestones[0]) / (milestones[1] - milestones[0])
-    self_exclude = clamp(milestone_progress, 0.0, 1.0) * self.exclusive_rate
-    ref_included = step >= milestones[0]
+    progress1 = (step - milestones[0]) / (milestones[1] - milestones[0])
+    self_exclude = clamp(progress1, 0.0, 1.0)
 
-    y_hat, loss, (loss_reconst,) = self._process_batch(batch, self_exclude, ref_included)
+    _, loss_model, (reconst,) = self._process_batch(batch, self_exclude)
 
-    self.log("train_loss_reconst", loss_reconst)
-    self.log("train_loss", loss)
+    self.log("train_loss", loss_model)
+    self.log("train_reconst", reconst)
     self.log("self_exclude_rate", self_exclude)
     self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
-    return loss
+    return loss_model
 
   def validation_step(self, batch: IntraDomainEntry2, batch_idx: int):
     y = batch[0].mel
-    y_hat, loss, (loss_reconst,) = self._process_batch(batch, self_exclude=1.0, ref_included=True)
 
-    self.log("valid_loss_reconst", loss_reconst)
-    self.log("valid_loss", loss)
+    y_hat_cheat, loss_model, (reconst,) = self._process_batch(batch, self_exclude=0.0)
+
+    self.log("vcheat_loss", loss_model)
+    self.log("vcheat_reconst", reconst)
+
+    y_hat, loss_model, (reconst,) = self._process_batch(batch, self_exclude=1.0)
+
+    self.log("valid_loss", loss_model)
+    self.log("valid_reconst", reconst)
     if batch_idx == 0:
       names = [f"{i:02d}" for i in range(4)]
-      log_spectrograms(self, names, y, y_hat)
+      log_spectrograms(self, names, y, y_hat, y_hat_cheat)
+      log_audios(self, P, names, y, y_hat, y_hat_cheat)
 
-    return loss
+    return loss_model
 
   def configure_optimizers(self):
-    optimizer = AdamW(self.parameters(), lr=self.lr)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, self.warmup_steps, self.total_steps)
+    opt_model = AdamW(self.model.parameters(), lr=self.lr)
+    sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
 
-    return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+    return [opt_model], [{"scheduler": sch_model, "interval": "step"}]
 
 if __name__ == "__main__":
 
@@ -250,27 +254,29 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule2(P, frames=256, n_samples=3, batch_size=8)
+  datamodule = IntraDomainDataModule2(P, frames=256, n_samples=15, batch_size=16)
+
+  total_steps = 10000
 
   model = VCModule(
       hdim=512,
       lr=1e-3,
       warmup_steps=500,
-      total_steps=50000,
-      milestones=(10000, 20000),
-      exclusive_rate=1.0,
+      total_steps=total_steps,
+      milestones=(2000, 40000),
   )
 
   wandb_logger = new_wandb_logger(PROJECT)
 
   trainer = L.Trainer(
-      max_steps=model.total_steps,
+      max_steps=total_steps * 2,  # optimizer を二回呼ぶので
       logger=wandb_logger,
       callbacks=[
           new_checkpoint_callback_wandb(PROJECT, wandb_logger),
       ],
       accelerator="gpu",
       precision="16-mixed",
+      deterministic=True,
   )
 
   # train the model

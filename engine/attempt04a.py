@@ -24,7 +24,7 @@ from wandb.wandb_run import Run
 
 from engine.dataset_feats import IntraDomainDataModule3, IntraDomainEntry3
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
-from engine.lib.layers import (Buckets, CLUBSampleForCategorical, GetNth, Transpose)
+from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
 from engine.lib.utils import clamp
 from engine.prepare import Preparation
 from engine.utils import (log_audios, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
@@ -56,14 +56,10 @@ class VCModel(nn.Module):
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
         Transpose(1, 2),
-        nn.Conv1d(energy_dim + w2v2_dim, hdim, kernel_size=1),
+        nn.Conv1d(energy_dim + pitch_dim + w2v2_dim, hdim, kernel_size=1),
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        # nn.RNN(hdim, hdim, batch_first=True),
-        # GetNth(0),
-        # nn.ReLU(),
-        # nn.LayerNorm(hdim),
         Transpose(1, 2),
         nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),
@@ -113,7 +109,7 @@ class VCModel(nn.Module):
     return self.mel_encode(mel)
 
   def forward_key(self, energy: Tensor, pitch: Tensor, w2v2: Tensor):
-    return self.encode_key(torch.cat([energy, w2v2], dim=-1))
+    return self.encode_key(torch.cat([energy, pitch, w2v2], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
     return self.encode_value(torch.cat([energy, pitch, mel], dim=-1))
@@ -223,7 +219,8 @@ class VCModule(L.LightningModule):
     club_val = self.club_val.learning_loss(club_x_val, club_y)
     club_key = self.club_key.learning_loss(club_x_key, club_y)
 
-    loss_model = reconst + mi_key
+    # add mi_key and mi_val if you want
+    loss_model = reconst
 
     return y_hat, (loss_model, club_val, club_key), (reconst, mi_val, mi_key)
 
@@ -274,22 +271,22 @@ class VCModule(L.LightningModule):
   def validation_step(self, batch: IntraDomainEntry3, batch_idx: int):
     y = batch[0].mel
 
-    y_hat_cheat, (loss_model, club_val, club_key), (loss_reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0)
+    y_hat_cheat, (loss_model, club_val, club_key), (reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0)
 
     # vcheat: validation with cheating
     self.log("vcheat_loss", loss_model)
     self.log("vcheat_loss_club_val", club_val)
     self.log("vcheat_loss_club_key", club_key)
-    self.log("vcheat_reconst", loss_reconst)
+    self.log("vcheat_reconst", reconst)
     self.log("vcheat_mi_val", mi_val)
     self.log("vcheat_mi_key", mi_key)
 
-    y_hat, (loss_model, club_val, club_key), (loss_reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
+    y_hat, (loss_model, club_val, club_key), (reconst, mi_val, mi_key) = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0)
 
     self.log("valid_loss", loss_model)
     self.log("valid_loss_club_val", club_val)
     self.log("valid_loss_club_key", club_key)
-    self.log("valid_reconst", loss_reconst)
+    self.log("valid_reconst", reconst)
     self.log("valid_mi_val", mi_val)
     self.log("valid_mi_key", mi_key)
 
@@ -311,7 +308,7 @@ class VCModule(L.LightningModule):
 if __name__ == "__main__":
 
   PROJECT = Path(__file__).stem
-  assert PROJECT == "attempt04ba"
+  assert PROJECT == "attempt04a"
   PROJECT = "attempt04"
 
   setup_train_environment()
