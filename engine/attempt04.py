@@ -269,7 +269,7 @@ if __name__ == "__main__":
   wandb_logger = new_wandb_logger(PROJECT)
 
   trainer = L.Trainer(
-      max_steps=total_steps * 2,  # optimizer を二回呼ぶので
+      max_steps=total_steps,
       logger=wandb_logger,
       callbacks=[
           new_checkpoint_callback_wandb(PROJECT, wandb_logger),
