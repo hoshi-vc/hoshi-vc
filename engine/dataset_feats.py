@@ -33,7 +33,7 @@ class FeatureDataset(Dataset):
 
     self.starts: list[tuple[str, int]] = []
     for d in dirs:
-      length = np.load(d / "mel.npy", mmap_mode="r").shape[0]
+      length = np.load(d / "melspec.npy", mmap_mode="r").shape[0]
       for i in range(0, length - frames - start_hop, start_hop):
         self.starts.append((d, i))
 
@@ -67,7 +67,7 @@ class IntraDomainDataset(Dataset):
     self.starts: list[tuple[str, int, int]] = []
     self.same_domain_lut: dict[str, list[int]] = {}
     for d, speaker_id in zip(dirs, speaker_ids):
-      length = np.load(d / "mel.npy", mmap_mode="r").shape[0]
+      length = np.load(d / "melspec.npy", mmap_mode="r").shape[0]
       for start in range(0, length - frames - start_hop, start_hop):
         self.starts.append((d, speaker_id, start))
         self.same_domain_lut.setdefault(d, []).append(len(self.starts) - 1)
@@ -138,10 +138,10 @@ def load_feature_entry(d: str, start: int, frames: int) -> FeatureEntry:
   end = start + frames
 
   return FeatureEntry(
-      mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
+      mel=np.array(np.load(d / "melspec.npy", mmap_mode="r")[start:end]),
       pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
       pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
-      w2v2=np.array(np.load(d / "w2v2.npy", mmap_mode="r")[start:end]),
+      w2v2=np.array(np.load(d / "wav2vec2.npy", mmap_mode="r")[start:end]),
   )
 
 class FeatureEntry2(NamedTuple):
@@ -162,7 +162,7 @@ class IntraDomainDataset2(IntraDomainDataset):
     return FeatureEntry2(
         speaker=np.array([speaker_id]),
         energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
-        mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
+        mel=np.array(np.load(d / "melspec.npy", mmap_mode="r")[start:end]),
         phoneme_i=np.array(np.load(d / f"phoneme_i_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
         phoneme_v=np.array(np.load(d / f"phoneme_v_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end]),
         pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
@@ -193,10 +193,10 @@ class IntraDomainDataset3(IntraDomainDataset):
     return FeatureEntry3(
         speaker=np.array([speaker_id]),
         energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
-        mel=np.array(np.load(d / "mel.npy", mmap_mode="r")[start:end]),
+        mel=np.array(np.load(d / "melspec.npy", mmap_mode="r")[start:end]),
         pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
         pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
-        w2v2=np.array(np.load(d / "w2v2.npy", mmap_mode="r")[start:end]),
+        w2v2=np.array(np.load(d / "wav2vec2.npy", mmap_mode="r")[start:end]),
     )
 
   def __getitem__(self, index: int) -> FeatureEntry3:

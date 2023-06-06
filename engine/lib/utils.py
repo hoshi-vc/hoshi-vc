@@ -3,6 +3,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+# %%
 import os
 import zipfile
 from contextlib import contextmanager
@@ -70,10 +71,13 @@ def change_loglevel(logger: str, level: int):
   yield
   logging.getLogger(logger).setLevel(prev_level)
 
-def np_safesave(file: str | Path, arr: NPArray):
+def np_safesave(file: str | Path, arr: NPArray, order_c: bool = True):
   # First, save to a temporary file
   # Then, rename it to the target file
   # This is to prevent the target file from being corrupted
+
+  # Contiguous array is faster to load
+  if order_c: arr = np.ascontiguousarray(arr)
 
   np.save(str(file) + ".tmp.npy", arr)
   os.replace(str(file) + ".tmp.npy", file)

@@ -29,7 +29,7 @@ P.prepare_faiss()
 # %%
 
 index = P.get_index("jvs001")
-target_mel = P.get_mel("jvs001")
+target_mel = P.get_melspec("jvs001")
 
 item = P.dataset[1000]
 print(item.name)

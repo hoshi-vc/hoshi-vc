@@ -28,8 +28,6 @@ class HiFiGAN:
 
     with no_grad():
       mel = mel.to(device)
-      source_sr = 16000
-      mel = convert_hop(mel, source_hop=320 * config.sampling_rate, target_hop=config.hop_size * source_sr, device=device)
       mel = mel.swapaxes(0, 1).unsqueeze(0).to(torch.float32)
       audio: Tensor = model(mel)
       audio = audio.squeeze()

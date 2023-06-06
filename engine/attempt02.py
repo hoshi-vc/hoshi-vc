@@ -192,7 +192,7 @@ print(item.name)
 
 audio, sr = item.audio[0], item.sr
 mel = P.extract_melspec(audio, sr)
-pitch_i_topk, _ = P.extract_pitch_topk(audio, sr, CREPE_MODEL, PITCH_TOPK, device)
+pitch_i_topk, _ = P.extract_pitch(audio, sr, CREPE_MODEL, PITCH_TOPK, device)
 pitch_i_topk = torch.as_tensor(pad_clip(mel.cpu().numpy(), pitch_i_topk.cpu().numpy()))
 pitch_i = pitch_i_topk[:, 0]
 pitch_i = (pitch_i - 20).maximum(torch.as_tensor(1))
@@ -212,7 +212,7 @@ play_audio(audio_hat, sr_hat)
 # TODO: 先に作ったモデルを使って、音声の切り貼りをうまくしてみる。
 
 index = P.get_index("jvs001")
-target_mel = P.get_mel("jvs001")
+target_mel = P.get_melspec("jvs001")
 target_pitch = P.get_pitch("jvs001")
 
 keys = P.extract_wav2vec2(audio, sr).cpu().numpy()
