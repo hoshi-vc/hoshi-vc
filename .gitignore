@@ -3,6 +3,9 @@
 .env.production
 .pdm-python
 /data/
+/tasks/*.py
+/tasks/current/
+/tasks/done/
 
 # auto generated
 __pycache__/
