@@ -15,6 +15,9 @@
   "lint-staged": {
     "*": [
       ".venv/bin/python3 tools/scan_notice.py"
+    ],
+    "pdm.lock": [
+      ".venv/bin/python3 tools/pdm_export.py --check"
     ]
   }
 }

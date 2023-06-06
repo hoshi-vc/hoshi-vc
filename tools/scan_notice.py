@@ -39,6 +39,7 @@ EXCLUDED_EXT = [
     ".prettierrc",
     ".toml",
     ".tool-versions",
+    ".txt",
     ".yaml",
 ]
 
@@ -55,7 +56,7 @@ ok = True
 if len(argv) > 1:
   files = argv[1:]
 else:
-  files = run(['fdfind', '--type', 'file', "--hidden"], capture_output=True, cwd=ROOT).stdout.decode().splitlines()
+  files = run(['fdfind', '--type', 'file', "--hidden"], capture_output=True, cwd=ROOT, check=True).stdout.decode().splitlines()
 
 for file in files:
   file = str((ROOT / file).relative_to(ROOT))
