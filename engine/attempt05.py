@@ -307,7 +307,7 @@ class VCModule(L.LightningModule):
       e2e_mel_hat = mel_hat[:, e2e_start:e2e_end].transpose(1, 2)
 
       y_g_hat = self.vocoder(e2e_mel_hat)
-      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size, h.win_size, h.fmin, h.fmax_for_loss, fast=True)
+      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000)
 
       # discriminator
 
@@ -491,13 +491,6 @@ if __name__ == "__main__":
           "upsample_initial_channel": 512,
           "resblock_kernel_sizes": [3, 7, 11],
           "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-          "num_mels": 80,
-          "n_fft": 1024,
-          "hop_size": 256,
-          "win_size": 1024,
-          "sampling_rate": 22050,
-          "fmin": 0,
-          "fmax_for_loss": None,
       }),
       hifi_gan_ckpt=(g_ckpt, do_ckpt),
   )
