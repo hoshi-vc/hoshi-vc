@@ -404,8 +404,8 @@ class VCModule(L.LightningModule):
     y = batch[0].audio
 
     # vcheat: validation with cheating
-    self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="vcheat")
-    self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="valid")
+    self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, log="vcheat")
+    self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, log="valid")
 
     if batch_idx == 0:
       mel_hat_cheat, y_hat_cheat, y_hat_mel_cheat = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
@@ -449,7 +449,10 @@ class VCModule(L.LightningModule):
       # これは逆に遅くなる & プロファイラで見る限り途中から fused じゃなくなる
       # self.vocoder = torch.jit.trace(self.vocoder, torch.randn(1, 80, 256, device=self.device))
 
-    sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
+    sch_model = S.ChainedScheduler([
+        get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
+        S.MultiplicativeLR(opt_model, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0)
+    ])
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
 
@@ -472,12 +475,12 @@ if __name__ == "__main__":
 
   model = VCModule(
       hdim=512,
-      lr=1e-4,
+      lr=1e-3,
       lr_club=1e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(4000, 6001, 10000, 20000),
-      e2e_milestones=(1000, 2000, 2000),
+      milestones=(0, 1, 4000, 10000),
+      e2e_milestones=(10000, 12000, 20000),
       e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
       grad_clip=0.5,
       hifi_gan=AttrDict({
