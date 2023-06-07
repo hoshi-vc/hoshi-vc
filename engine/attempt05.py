@@ -18,6 +18,7 @@ import torch.functional as F
 import torch.nn.functional as F
 import torch.optim.lr_scheduler as S
 import wandb
+from lightning.pytorch import profilers
 from torch import Tensor, nn
 from torch.optim import AdamW
 from wandb.wandb_run import Run
@@ -84,7 +85,7 @@ class VCModel(nn.Module):
         nn.LayerNorm(hdim),
     )
 
-    self.lookup = nn.MultiheadAttention(hdim, 4, dropout=0.1, batch_first=True)
+    self.lookup = nn.MultiheadAttention(hdim, 4, batch_first=True)
 
     self.decode = nn.Sequential(
         # input: (batch, src_len, hdim + energy_dim + pitch_dim)
@@ -155,7 +156,7 @@ class VCModule(L.LightningModule):
                total_steps: int,
                milestones: tuple[int, int, int, int],
                grad_clip: float,
-               e2e_start: int,
+               e2e_milestones: int,
                e2e_frames: int,
                hifi_gan: Any,
                hifi_gan_ckpt=None):
@@ -176,7 +177,7 @@ class VCModule(L.LightningModule):
     self.lr = lr
     self.lr_club = lr_club
     self.grad_clip = grad_clip
-    self.e2e_start = e2e_start
+    self.e2e_milestones = e2e_milestones
     self.e2e_frames = e2e_frames
     self.hifi_gan = hifi_gan
     self.hifi_gan_ckpt = hifi_gan_ckpt
@@ -229,11 +230,14 @@ class VCModule(L.LightningModule):
                      self_ratio: float,
                      ref_ratio: float,
                      step: int,
+                     e2e: bool,
                      e2e_frames: Optional[int],
                      train=False,
                      log: Optional[str] = None):
     h = self.hifi_gan
     opt_model, opt_club, opt_d = self.optimizers()
+
+    # TODO: あとできれいに書き直したい...
 
     # NOTE: step 0 ではバグ確認のためすべてのロスを使って backward する。
     debug = step == 0 and train
@@ -245,12 +249,17 @@ class VCModule(L.LightningModule):
     vc_inputs = self._make_vc_inputs(batch, self_ratio, ref_ratio)
 
     # vc model
+
     mel_hat: Tensor
     mel_hat, (ref_key, ref_value) = self.vc_model(vc_inputs)
 
     vc_reconst = F.l1_loss(mel_hat, mel)
 
+    if log:
+      self.log(f"{log}_reconst", vc_reconst)
+
     # CLUB
+
     club_x_val = ref_value
     club_x_key = ref_key
     club_y = vc_inputs.ref_pitch_i[:, :, 0]
@@ -271,57 +280,88 @@ class VCModule(L.LightningModule):
       self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
       opt_club.step()
 
-    # vocoder
-    if e2e_frames is None:
-      e2e_start = 0
-      e2e_end = mel.shape[1]
-    else:
-      e2e_start = self.clip_rand.randint(0, mel.shape[1] - e2e_frames)
-      e2e_end = e2e_start + e2e_frames
+    if log:
+      self.log(f"{log}_mi_val", mi_val)
+      self.log(f"{log}_mi_key", mi_key)
+      self.log(f"{log}_loss_club_val", club_val)
+      self.log(f"{log}_loss_club_key", club_key)
 
-    e2e_y = y[:, e2e_start * 256:e2e_end * 256].unsqueeze(1)
-    e2e_mel = mel[:, e2e_start:e2e_end].transpose(1, 2)
-    e2e_mel_hat = mel_hat[:, e2e_start:e2e_end].transpose(1, 2)
+    # discriminator, e2e
 
-    y_g_hat = self.vocoder(e2e_mel_hat)
-    y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size, h.win_size, h.fmin, h.fmax_for_loss)
+    total_model = vc_reconst / 0.4
+    y_g_hat = None
+    y_g_hat_mel = None
+    if debug or e2e:
 
-    # MPD
-    y_df_hat_r, y_df_hat_g, _, _ = self.vocoder_mpd(e2e_y, y_g_hat.detach())
-    loss_disc_f, losses_disc_f_r, losses_disc_f_g = VOC.discriminator_loss(y_df_hat_r, y_df_hat_g)
+      # vocoder
 
-    # MSD
-    y_ds_hat_r, y_ds_hat_g, _, _ = self.vocoder_msd(e2e_y, y_g_hat.detach())
-    loss_disc_s, losses_disc_s_r, losses_disc_s_g = VOC.discriminator_loss(y_ds_hat_r, y_ds_hat_g)
+      if e2e_frames is None:
+        e2e_start = 0
+        e2e_end = mel.shape[1]
+      else:
+        e2e_start = self.clip_rand.randint(0, mel.shape[1] - e2e_frames)
+        e2e_end = e2e_start + e2e_frames
 
-    total_disc = loss_disc_s + loss_disc_f
+      e2e_y = y[:, e2e_start * 256:e2e_end * 256].unsqueeze(1)
+      e2e_mel = mel[:, e2e_start:e2e_end].transpose(1, 2)
+      e2e_mel_hat = mel_hat[:, e2e_start:e2e_end].transpose(1, 2)
 
-    if train and (debug or step >= self.e2e_start):
-      opt_d.zero_grad()
-      self.toggle_optimizer(opt_d)
-      self.manual_backward(total_disc, retain_graph=True)
-      self.untoggle_optimizer(opt_d)
-      self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
-      opt_d.step()
+      y_g_hat = self.vocoder(e2e_mel_hat)
+      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size, h.win_size, h.fmin, h.fmax_for_loss, fast=True)
 
-    # e2e/vocoder loss
+      # discriminator
 
-    loss_mel = F.l1_loss(e2e_mel, y_g_hat_mel) * 45
+      y_df_hat_r, y_df_hat_g, _, _ = self.vocoder_mpd(e2e_y, y_g_hat.detach())
+      loss_disc_f = VOC.discriminator_loss(y_df_hat_r, y_df_hat_g)
 
-    y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = self.vocoder_mpd(e2e_y, y_g_hat)
-    y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = self.vocoder_msd(e2e_y, y_g_hat)
-    loss_fm_f = VOC.feature_loss(fmap_f_r, fmap_f_g)
-    loss_fm_s = VOC.feature_loss(fmap_s_r, fmap_s_g)
-    loss_gen_f, losses_gen_f = VOC.generator_loss(y_df_hat_g)
-    loss_gen_s, losses_gen_s = VOC.generator_loss(y_ds_hat_g)
+      y_ds_hat_r, y_ds_hat_g, _, _ = self.vocoder_msd(e2e_y, y_g_hat.detach())
+      loss_disc_s = VOC.discriminator_loss(y_ds_hat_r, y_ds_hat_g)
 
-    if debug:
-      total_model = vc_reconst
-      total_model += loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel
-    elif step < self.e2e_start:
-      total_model = vc_reconst
-    else:
-      total_model = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel
+      total_disc = loss_disc_s + loss_disc_f
+
+      if train:
+        opt_d.zero_grad()
+        self.toggle_optimizer(opt_d)
+        self.manual_backward(total_disc, retain_graph=True)
+        self.untoggle_optimizer(opt_d)
+        self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
+        opt_d.step()
+
+      if log:
+        self.log(f"{log}_loss_disc", total_disc)
+        self.log(f"{log}_e2e_disc_f", loss_disc_f)
+        self.log(f"{log}_e2e_disc_s", loss_disc_s)
+
+      # e2e generator loss
+
+      loss_mel = F.l1_loss(e2e_mel, y_g_hat_mel)
+
+      y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = self.vocoder_mpd(e2e_y, y_g_hat)
+      y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = self.vocoder_msd(e2e_y, y_g_hat)
+      loss_fm_f = VOC.feature_loss(fmap_f_r, fmap_f_g)
+      loss_fm_s = VOC.feature_loss(fmap_s_r, fmap_s_g)
+      loss_gen_f, losses_gen_f = VOC.generator_loss(y_df_hat_g)
+      loss_gen_s, losses_gen_s = VOC.generator_loss(y_ds_hat_g)
+
+      e2e_model_loss = (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel * 45.0) / 60.0
+
+      if debug: total_model = total_model * 0.2 + e2e_model_loss * 0.8
+      else:
+        if step < self.e2e_milestones[1]: pass
+        elif step < self.e2e_milestones[2]: total_model = total_model * 0.2 + e2e_model_loss * 0.8
+        else: total_model = e2e_model_loss
+
+      if log:
+        self.log(f"{log}_e2e_gen_f", loss_gen_f)
+        self.log(f"{log}_e2e_gen_s", loss_gen_s)
+        self.log(f"{log}_e2e_fm_f", loss_fm_f)
+        self.log(f"{log}_e2e_fm_s", loss_fm_s)
+        self.log(f"{log}_e2e_mel", loss_mel)
+
+      y_g_hat = y_g_hat.squeeze(1)
+      y_g_hat_mel = y_g_hat_mel.transpose(1, 2)
+
+    # generator
 
     if train:
       opt_model.zero_grad()
@@ -331,25 +371,10 @@ class VCModule(L.LightningModule):
       self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
       opt_model.step()
 
-    ### === log === ###
-
-    if log is not None:
+    if log:
       self.log(f"{log}_loss", total_model)
-      self.log(f"{log}_loss_disc", total_disc)
-      self.log(f"{log}_loss_club_val", club_val)
-      self.log(f"{log}_loss_club_key", club_key)
-      self.log(f"{log}_e2e_disc_f", loss_disc_f)
-      self.log(f"{log}_e2e_disc_s", loss_disc_s)
-      self.log(f"{log}_e2e_gen_f", loss_gen_f)
-      self.log(f"{log}_e2e_gen_s", loss_gen_s)
-      self.log(f"{log}_e2e_fm_f", loss_fm_f)
-      self.log(f"{log}_e2e_fm_s", loss_fm_s)
-      self.log(f"{log}_e2e_mel", loss_mel)
-      self.log(f"{log}_reconst", vc_reconst)
-      self.log(f"{log}_mi_val", mi_val)
-      self.log(f"{log}_mi_key", mi_key)
 
-    return (mel_hat, y_g_hat.squeeze(1)), (total_model, total_disc, total_club)
+    return mel_hat, y_g_hat, y_g_hat_mel
 
   def training_step(self, batch: IntraDomainEntry4, batch_idx: int):
     step = self.batches_that_stepped()
@@ -367,7 +392,7 @@ class VCModule(L.LightningModule):
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
     self.log("lr_d", opt_d.optimizer.param_groups[0]["lr"])
 
-    _, _ = self._process_batch(batch, self_ratio, ref_ratio, step, e2e_frames=self.e2e_frames, train=True, log="train")
+    self._process_batch(batch, self_ratio, ref_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
 
     sch_club.step()
     sch_model.step()
@@ -379,14 +404,15 @@ class VCModule(L.LightningModule):
     y = batch[0].audio
 
     # vcheat: validation with cheating
-    _, _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e_frames=self.e2e_frames, log="vcheat")
-    _, _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e_frames=self.e2e_frames, log="valid")
+    self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="vcheat")
+    self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="valid")
 
     if batch_idx == 0:
-      (mel_hat_cheat, y_hat_cheat), _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e_frames=None)
-      (mel_hat, y_hat), _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e_frames=None)
+      mel_hat_cheat, y_hat_cheat, y_hat_mel_cheat = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
+      mel_hat, y_hat, y_hat_mel = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
       names = [f"{i:02d}" for i in range(8)]
-      log_spectrograms(self, names, mel, mel_hat, mel_hat_cheat)
+      log_spectrograms(self, names, mel, mel_hat_cheat, y_hat_mel_cheat, "Spectrogram (Cheat)")
+      log_spectrograms(self, names, mel, mel_hat, y_hat_mel, "Spectrogram")
       log_audios2(self, P, names, 22050, y, y_hat, y_hat_cheat)
 
   def configure_optimizers(self):
@@ -420,6 +446,9 @@ class VCModule(L.LightningModule):
       # self.vocoder_mpd = torch.compile(self.vocoder_mpd)
       # self.vocoder_msd = torch.compile(self.vocoder_msd)
 
+      # これは逆に遅くなる & プロファイラで見る限り途中から fused じゃなくなる
+      # self.vocoder = torch.jit.trace(self.vocoder, torch.randn(1, 80, 256, device=self.device))
+
     sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
@@ -434,23 +463,23 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule4(P, frames=128, n_samples=15, batch_size=8, n_batches=2000, n_batches_val=400)
+  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=7, batch_size=8, n_batches=1000, n_batches_val=200)
 
-  total_steps = 50000
+  total_steps = 30000
 
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
   do_ckpt = DATA_DIR / "vocoder" / "do_02500000"
 
   model = VCModule(
       hdim=512,
-      lr=1e-3,
+      lr=1e-4,
       lr_club=1e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 10000, 20000),
-      e2e_start=20000,
-      e2e_frames=32,
-      grad_clip=1.0,
+      milestones=(4000, 6001, 10000, 20000),
+      e2e_milestones=(1000, 2000, 2000),
+      e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
+      grad_clip=0.5,
       hifi_gan=AttrDict({
           "resblock": "1",
           "learning_rate": 0.0002,
@@ -475,6 +504,7 @@ if __name__ == "__main__":
 
   # NOTE: pytorch 2.0 では torch._functorch.partitioners._tensor_nbytes が complex64 をサポートしないのでエラーが出る
   #       https://pytorch.org/functorch/2.0/_modules/torch/_functorch/partitioners.html
+
   # https://pytorch.org/get-started/pytorch-2.0/
   # https://pytorch.org/tutorials/intermediate/torch_compile_tutorial.html
   # https://pytorch.org/docs/stable/dynamo/faq.html
@@ -499,8 +529,15 @@ if __name__ == "__main__":
       ],
       accelerator="gpu",
       precision="16-mixed",
+      benchmark=True,
       # deterministic=True,
       # detect_anomaly=True,
+      # profiler=profilers.PyTorchProfiler(
+      #     DATA_DIR / "profiler",
+      #     schedule=torch.profiler.schedule(wait=20, warmup=10, active=6, repeat=1),
+      #     on_trace_ready=torch.profiler.tensorboard_trace_handler(DATA_DIR / "profiler"),
+      #     with_stack=True,
+      # ),
   )
 
   # train the model
