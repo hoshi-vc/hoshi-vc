@@ -81,3 +81,28 @@ def log_audios(self, P: Preparation, names: list[str], y: Tensor, y_hat: Tensor,
       ])
 
   self.log_wandb({f"Audio/{step:08d}": wandb.Table(data=data, columns=columns)})
+
+def log_audios2(self, P: Preparation, names: list[str], sr: int, y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
+  step = self.batches_that_stepped()
+
+  columns = ["index", "original", "reconstructed"]
+  if y_hat_cheat is not None:
+    columns.append("reconstructed_cheat")
+
+  data = []
+  for i, name in enumerate(names):
+    if y_hat_cheat is None:
+      data.append([
+          name,
+          wandb.Audio(y[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat[i].cpu().to(torch.float32), sample_rate=sr),
+      ])
+    else:
+      data.append([
+          name,
+          wandb.Audio(y[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat_cheat[i].cpu().to(torch.float32), sample_rate=sr),
+      ])
+
+  self.log_wandb({f"Audio/{step:08d}": wandb.Table(data=data, columns=columns)})

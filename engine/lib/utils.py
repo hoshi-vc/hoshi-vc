@@ -104,3 +104,8 @@ def load_ckpt(path: Path | str, **kwargs) -> dict:
     v.load_state_dict(ckpt[k])
 
   return ckpt["data"]
+
+class AttrDict(dict):
+  def __init__(self, *args, **kwargs):
+    super(AttrDict, self).__init__(*args, **kwargs)
+    self.__dict__ = self

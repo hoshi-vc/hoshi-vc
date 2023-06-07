@@ -9,7 +9,7 @@ from typing import Any, Callable, NamedTuple, Optional
 import lightning.pytorch as L
 import numpy as np
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler, Subset
 
 from engine.prepare import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, Preparation)
 
@@ -205,3 +205,50 @@ class IntraDomainDataset3(IntraDomainDataset):
 class IntraDomainDataModule3(IntraDomainDataModule):
   def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4):
     super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset3)
+
+class FeatureEntry4(NamedTuple):
+  audio: Tensor
+  speaker: Tensor
+  energy: Tensor
+  mel: Tensor
+  pitch_i: Tensor
+  pitch_v: Tensor
+  w2v2: Tensor
+
+IntraDomainEntry4 = list[FeatureEntry4]
+
+class IntraDomainDataset4(IntraDomainDataset):
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> FeatureEntry4:
+    end = start + frames
+
+    return FeatureEntry4(
+        audio=np.array(np.load(d / "audio.npy", mmap_mode="r")[start * 256:end * 256]),
+        speaker=np.array([speaker_id]),
+        energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
+        mel=np.array(np.load(d / "melspec.npy", mmap_mode="r")[start:end]),
+        pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
+        pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
+        w2v2=np.array(np.load(d / "wav2vec2.npy", mmap_mode="r")[start:end]),
+    )
+
+  def __getitem__(self, index: int) -> FeatureEntry4:
+    return super().__getitem__(index)
+
+class IntraDomainDataModule4(IntraDomainDataModule):
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4, n_items=None, n_items_val=None):
+    super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset4)
+    self.n_items = n_items
+    self.n_items_val = n_items_val
+
+  def train_dataloader(self):
+    if self.n_items is None: return super().train_dataloader()
+    return DataLoader(
+        self.intra_train,
+        batch_size=self.batch_size,
+        num_workers=self.num_workers,
+        sampler=RandomSampler(self.intra_train, replacement=True, num_samples=self.n_items))
+
+  def val_dataloader(self):
+    if self.n_items_val is None: return super().val_dataloader()
+    dataset = Subset(self.intra_valid, Random(37892834).choices(list(range(len(self.intra_valid))), k=self.n_items_val))
+    return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)

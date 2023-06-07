@@ -12,7 +12,8 @@ import time
 import tty
 from pathlib import Path
 
-TASKS = Path(__file__).parent.parent / "tasks"
+ROOT = Path(__file__).parent.parent
+TASKS = ROOT / "tasks"
 CURRENT = TASKS / "current"
 DONE = TASKS / "done"
 
@@ -28,7 +29,7 @@ def execute_file(file: Path):
   file.rename(current_file)
 
   try:
-    subprocess.run(["python", str(current_file)], check=True)
+    subprocess.run(["python", str(current_file)], check=True, cwd=ROOT)
   except subprocess.CalledProcessError as e:
     print(f"=== Error on '{file.name}' : exit status {e.returncode}")
 

@@ -37,6 +37,8 @@ source .venv/bin/activate
 python engine/prepare.py
 ```
 
+Note: `requirements.txt` は最新に保たれているはずなので、それを使ってもいいです。
+
 <!-- TODO: 環境構築の方法だけじゃなくて、学習の走らせ方などまで書きたい。 -->
 
 ## やってみたこと
@@ -76,6 +78,17 @@ FragmentVC がなぜかうまくいかなかったので、新しくモデルを
 - 学習を容易にするために、ピッチや音量も特徴量としてつかう
 
 → FastSpeech2 をベースにして声質変換を試みたときと同様のペースでロスが低下してくれた。
+
+### Attempt 05: モデルと vocoder を組み合わせる
+
+次は GAN を入れようと思ったけど、せっかくなので joint fine-tuning してみる。
+
+[JETS](https://arxiv.org/pdf/2203.16852.pdf) や [ESPnet2-TTS](https://arxiv.org/pdf/2110.07840.pdf) によると、 fine-tuned vocoder よりも joint fine-tuning の方がいいらしい。
+
+学習に GAN を取り入れると melspectrogram l1 loss が性能評価に適さなくなるので、指標を増やす。
+
+- [MOSNet](https://github.com/aliutkus/speechmetrics#mosnet-absolutemosnet-or-mosnet) : mean opinion score
+- [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) : speaker verification
 
 <!-- - モデルの構造に FastSpeech2 の構造をつかってみる -->
 <!-- - (ログ出力に attention map も追加する) -->
