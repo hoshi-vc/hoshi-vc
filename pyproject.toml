@@ -24,6 +24,8 @@ dependencies = [
     "resampy~=0.4",
     "speechbrain>=0.5.14",
     "speechmetrics[cpu] @ git+https://github.com/aliutkus/speechmetrics",
+    "tensorboard>=2.12.3",
+    "torch-tb-profiler>=0.4.1",
     "torch>=2.1.0.dev20230606",
     "torchaudio>=2.1.0.dev20230606",
     "torchcrepe~=0.0",
