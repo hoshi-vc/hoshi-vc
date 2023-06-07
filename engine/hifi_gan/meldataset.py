@@ -38,17 +38,23 @@ def spectral_de_normalize_torch(magnitudes):
 mel_basis = {}
 hann_window = {}
 
-def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
-  if torch.min(y) < -1.:
-    print('min value is ', torch.min(y))
-  if torch.max(y) > 1.:
-    print('max value is ', torch.max(y))
+def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False, fast=False):
+  if not fast:
+    if torch.min(y) < -1.:
+      print('min value is ', torch.min(y))
+    if torch.max(y) > 1.:
+      print('max value is ', torch.max(y))
 
   global mel_basis, hann_window
-  if fmax not in mel_basis:
+
+  fmax_name = "_".join(map(str, [sampling_rate, n_fft, num_mels, fmin, fmax, y.device]))
+  if fmax_name not in mel_basis:
     mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
-    mel_basis[str(fmax) + '_' + str(y.device)] = torch.from_numpy(mel).float().to(y.device)
-    hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+    mel_basis[fmax_name] = torch.from_numpy(mel).float().to(y.device)
+
+  hann_name = "_".join(map(str, [win_size, y.device]))
+  if hann_name not in hann_window:
+    hann_window[hann_name] = torch.hann_window(win_size).to(y.device)
 
   y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)), mode='reflect')
   y = y.squeeze(1)
@@ -58,7 +64,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
       n_fft,
       hop_length=hop_size,
       win_length=win_size,
-      window=hann_window[str(y.device)],
+      window=hann_window[hann_name],
       center=center,
       pad_mode='reflect',
       normalized=False,
@@ -68,7 +74,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
 
   spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
 
-  spec = torch.matmul(mel_basis[str(fmax) + '_' + str(y.device)], spec)
+  spec = torch.matmul(mel_basis[fmax_name], spec)
   spec = spectral_normalize_torch(spec)
 
   return spec
