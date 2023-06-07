@@ -47,14 +47,13 @@ def new_checkpoint_callback_wandb(project: str, wandb_logger: WandbLogger, **kwa
   return new_checkpoint_callback(project, run_path, **kwargs)
 
 @torch._dynamo.disable()
-def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
+def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Spectrogram"):
   for i, name in enumerate(names):
-    for i in range(4):
-      if y_hat_cheat is None:
-        self.log_wandb({f"Spectrogram/{name}": wandb.Image(plot_spectrograms2(y[i], y_hat[i], y_hat_cheat[i]))})
-      else:
-        self.log_wandb({f"Spectrogram/{name}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
-    plt.close("all")
+    if y_hat_cheat is not None:
+      self.log_wandb({f"{folder}/{name}": wandb.Image(plot_spectrograms2(y[i], y_hat[i], y_hat_cheat[i]))})
+    else:
+      self.log_wandb({f"{folder}/{name}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
+  plt.close("all")
 
 @torch._dynamo.disable()
 def log_audios(self, P: Preparation, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
