@@ -8,6 +8,7 @@ from typing import Optional
 
 import matplotlib
 import torch
+import torch._dynamo
 import wandb
 from lightning import seed_everything
 from lightning.pytorch import callbacks as C
@@ -45,6 +46,7 @@ def new_checkpoint_callback_wandb(project: str, wandb_logger: WandbLogger, **kwa
   run_path = run_name + path.sep + run_id
   return new_checkpoint_callback(project, run_path, **kwargs)
 
+@torch._dynamo.disable()
 def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
   for i, name in enumerate(names):
     for i in range(4):
@@ -54,6 +56,7 @@ def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_che
         self.log_wandb({f"Spectrogram/{name}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
     plt.close("all")
 
+@torch._dynamo.disable()
 def log_audios(self, P: Preparation, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
   step = self.batches_that_stepped()
 
@@ -82,6 +85,7 @@ def log_audios(self, P: Preparation, names: list[str], y: Tensor, y_hat: Tensor,
 
   self.log_wandb({f"Audio/{step:08d}": wandb.Table(data=data, columns=columns)})
 
+@torch._dynamo.disable()
 def log_audios2(self, P: Preparation, names: list[str], sr: int, y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
   step = self.batches_that_stepped()
 

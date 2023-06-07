@@ -129,10 +129,24 @@ class IntraDomainDataModule(L.LightningDataModule):
     self.intra_valid = self.dataset_class(valid_dirs, speaker_ids, self.frames, self.frames, self.n_samples, random_offset=False, shuffle=7892639)
 
   def train_dataloader(self):
-    return DataLoader(self.intra_train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+    return DataLoader(
+        self.intra_train,
+        batch_size=self.batch_size,
+        num_workers=self.num_workers,
+        shuffle=True,
+        drop_last=True,
+        pin_memory=True,
+    )
 
   def val_dataloader(self):
-    return DataLoader(self.intra_valid, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+    return DataLoader(
+        self.intra_valid,
+        batch_size=self.batch_size,
+        num_workers=self.num_workers,
+        shuffle=False,
+        drop_last=True,
+        pin_memory=True,
+    )
 
 def load_feature_entry(d: str, start: int, frames: int) -> FeatureEntry:
   end = start + frames
@@ -235,20 +249,22 @@ class IntraDomainDataset4(IntraDomainDataset):
     return super().__getitem__(index)
 
 class IntraDomainDataModule4(IntraDomainDataModule):
-  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4, n_items=None, n_items_val=None):
+  def __init__(self, P: Preparation, frames: int, n_samples: int, batch_size: int, num_workers=4, n_batches=None, n_batches_val=None):
     super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDataset4)
-    self.n_items = n_items
-    self.n_items_val = n_items_val
+    self.n_batches = n_batches
+    self.n_batches_val = n_batches_val
+
+  def setup(self, stage: str):
+    super().setup(stage)
+    self.intra_valid = Subset(self.intra_valid, Random(37892834).choices(list(range(len(self.intra_valid))), k=self.n_batches_val * self.batch_size))
 
   def train_dataloader(self):
-    if self.n_items is None: return super().train_dataloader()
+    if self.n_batches is None: return super().train_dataloader()
     return DataLoader(
         self.intra_train,
         batch_size=self.batch_size,
         num_workers=self.num_workers,
-        sampler=RandomSampler(self.intra_train, replacement=True, num_samples=self.n_items))
-
-  def val_dataloader(self):
-    if self.n_items_val is None: return super().val_dataloader()
-    dataset = Subset(self.intra_valid, Random(37892834).choices(list(range(len(self.intra_valid))), k=self.n_items_val))
-    return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+        sampler=RandomSampler(self.intra_train, replacement=True, num_samples=self.n_batches * self.batch_size),
+        drop_last=True,
+        pin_memory=True,
+    )

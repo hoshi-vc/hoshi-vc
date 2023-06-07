@@ -6,7 +6,6 @@
 # %%
 
 import json
-from math import ceil
 from pathlib import Path
 from random import Random
 from typing import Any, NamedTuple, Optional
@@ -24,7 +23,6 @@ from wandb.wandb_run import Run
 
 import engine.hifi_gan.models as VOC
 from engine.dataset_feats import IntraDomainDataModule4, IntraDomainEntry4
-from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
 from engine.lib.utils import DATA_DIR, AttrDict, clamp
@@ -224,19 +222,11 @@ class VCModule(L.LightningModule):
         ref_mel=ref_mel,
     )
 
-  def _process_batch(self,
-                     batch: IntraDomainEntry4,
-                     self_ratio: float,
-                     ref_ratio: float,
-                     step: int,
-                     e2e_frames: Optional[int],
-                     train=False,
-                     log: Optional[str] = None):
+  def _process_batch(self, batch: IntraDomainEntry4, self_ratio: float, ref_ratio: float, step: int, e2e_frames: Optional[int], log: Optional[str] = None):
     h = self.hifi_gan
-    opt_model, opt_club, opt_d = self.optimizers()
 
     # NOTE: step 0 ではバグ確認のためすべてのロスを使って backward する。
-    debug = step == 0 and train
+    debug = step == 0
     if debug: print('process_batch: debug mode')
 
     # inputs
@@ -263,14 +253,6 @@ class VCModule(L.LightningModule):
 
     total_club = club_val + club_key
 
-    if train:
-      opt_club.zero_grad()
-      self.toggle_optimizer(opt_club)
-      self.manual_backward(total_club, retain_graph=True)
-      self.untoggle_optimizer(opt_club)
-      self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
-      opt_club.step()
-
     # vocoder
     if e2e_frames is None:
       e2e_start = 0
@@ -296,14 +278,6 @@ class VCModule(L.LightningModule):
 
     total_disc = loss_disc_s + loss_disc_f
 
-    if train and (debug or step >= self.e2e_start):
-      opt_d.zero_grad()
-      self.toggle_optimizer(opt_d)
-      self.manual_backward(total_disc, retain_graph=True)
-      self.untoggle_optimizer(opt_d)
-      self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
-      opt_d.step()
-
     # e2e/vocoder loss
 
     loss_mel = F.l1_loss(e2e_mel, y_g_hat_mel) * 45
@@ -322,14 +296,6 @@ class VCModule(L.LightningModule):
       total_model = vc_reconst
     else:
       total_model = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel
-
-    if train:
-      opt_model.zero_grad()
-      self.toggle_optimizer(opt_model)
-      self.manual_backward(total_model)
-      self.untoggle_optimizer(opt_model)
-      self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
-      opt_model.step()
 
     ### === log === ###
 
@@ -367,7 +333,30 @@ class VCModule(L.LightningModule):
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
     self.log("lr_d", opt_d.optimizer.param_groups[0]["lr"])
 
-    _, _ = self._process_batch(batch, self_ratio, ref_ratio, step, e2e_frames=self.e2e_frames, train=True, log="train")
+    _, (total_model, total_disc, total_club) = self._process_batch(batch, self_ratio, ref_ratio, step, e2e_frames=self.e2e_frames, log="train")
+
+    opt_club.zero_grad()
+    self.toggle_optimizer(opt_club)
+    self.manual_backward(total_club, retain_graph=True)
+    self.untoggle_optimizer(opt_club)
+    self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
+    opt_club.step()
+
+    # step 0 ではバグ確認のためにすべての optimizer を step させる
+    if step == 0 or step >= self.e2e_start:
+      opt_d.zero_grad()
+      self.toggle_optimizer(opt_d)
+      self.manual_backward(total_disc, retain_graph=True)
+      self.untoggle_optimizer(opt_d)
+      self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
+      opt_d.step()
+
+    opt_model.zero_grad()
+    self.toggle_optimizer(opt_model)
+    self.manual_backward(total_model)
+    self.untoggle_optimizer(opt_model)
+    self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
+    opt_model.step()
 
     sch_club.step()
     sch_model.step()
@@ -385,7 +374,7 @@ class VCModule(L.LightningModule):
     if batch_idx == 0:
       (mel_hat_cheat, y_hat_cheat), _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e_frames=None)
       (mel_hat, y_hat), _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e_frames=None)
-      names = [f"{i:02d}" for i in range(8)]
+      names = [f"{i:02d}" for i in range(4)]
       log_spectrograms(self, names, mel, mel_hat, mel_hat_cheat)
       log_audios2(self, P, names, 22050, y, y_hat, y_hat_cheat)
 
@@ -410,17 +399,7 @@ class VCModule(L.LightningModule):
       self.vocoder_msd.load_state_dict(do_data['msd'])
       opt_d.load_state_dict(do_data['optim_d'])
 
-      # 1 epoch = 500 steps として、速度が安定してきた epoch 3 後半あたりの処理速度を雑に測った
-      # with compile:    3.52 it/s
-      # without compile: 3.52 it/s
-      # という結果だったので、モデルだけコンパイルしても学習には大差ないのかもしれない
-
-      # self.vc_model = torch.compile(self.vc_model)
-      # self.vocoder = torch.compile(self.vocoder)
-      # self.vocoder_mpd = torch.compile(self.vocoder_mpd)
-      # self.vocoder_msd = torch.compile(self.vocoder_msd)
-
-    sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
+    sch_model = S.MultiplicativeLR(opt_model, lambda step: 1.0)
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
 
@@ -434,21 +413,21 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule4(P, frames=128, n_samples=15, batch_size=8, n_batches=2000, n_batches_val=400)
+  datamodule = IntraDomainDataModule4(P, frames=128, n_samples=15, batch_size=8, n_batches=500, n_batches_val=100)
 
-  total_steps = 50000
+  total_steps = 5000
 
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
   do_ckpt = DATA_DIR / "vocoder" / "do_02500000"
 
   model = VCModule(
       hdim=512,
-      lr=1e-3,
-      lr_club=1e-3,
+      lr=2e-4,
+      lr_club=5e-3,
       warmup_steps=500,
       total_steps=total_steps,
       milestones=(0, 1, 10000, 20000),
-      e2e_start=20000,
+      e2e_start=6000,
       e2e_frames=32,
       grad_clip=1.0,
       hifi_gan=AttrDict({
@@ -473,26 +452,10 @@ if __name__ == "__main__":
       hifi_gan_ckpt=(g_ckpt, do_ckpt),
   )
 
-  # NOTE: pytorch 2.0 では torch._functorch.partitioners._tensor_nbytes が complex64 をサポートしないのでエラーが出る
-  #       https://pytorch.org/functorch/2.0/_modules/torch/_functorch/partitioners.html
-  # https://pytorch.org/get-started/pytorch-2.0/
-  # https://pytorch.org/tutorials/intermediate/torch_compile_tutorial.html
-  # https://pytorch.org/docs/stable/dynamo/faq.html
-  # https://pytorch.org/docs/stable/dynamo/troubleshooting.html
-  # https://github.com/pytorch/pytorch/blob/f7608998649d96ace4d2b56dc392ad36177791e2/docs/source/compile/fine_grained_apis.rst
-  # https://grep.app/search?q=torch._dynamo
-
-  # use the latest lagic : なぜかエラーするので、モデル群だけをコンパイルすることにした : see configure_optimizers
-  # model = torch.compile(model)  # -> RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation （なんで...）
-
-  # torch._dynamo.config.verbose = True
-  # from torch._dynamo.utils import CompileProfiler
-  # prof = CompileProfiler()
-
   wandb_logger = new_wandb_logger(PROJECT)
 
   trainer = L.Trainer(
-      max_epochs=int(ceil(total_steps / datamodule.n_batches)),
+      max_steps=total_steps * 2,  # optimizer を二回呼ぶので
       logger=wandb_logger,
       callbacks=[
           new_checkpoint_callback_wandb(PROJECT, wandb_logger),
@@ -505,9 +468,6 @@ if __name__ == "__main__":
 
   # train the model
   trainer.fit(model, datamodule=datamodule)
-
-  # print(prof.report())
-  # print(torch._dynamo.utils.compile_times())
 
   # [optional] finish the wandb run, necessary in notebooks
   wandb.finish()

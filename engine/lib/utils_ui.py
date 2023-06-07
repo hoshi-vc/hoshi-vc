@@ -66,6 +66,7 @@ def plot_spectrograms(y: Tensor, y_hat: Tensor):
 def plot_spectrograms2(y: Tensor, y_hat: Tensor, y_hat_cheat: Tensor):
   y = y.cpu()
   y_hat = y_hat.cpu()
+  y_hat_cheat = y_hat_cheat.cpu()
 
   fig, (ax1, ax2, ax3) = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
 

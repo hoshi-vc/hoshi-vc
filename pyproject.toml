@@ -8,6 +8,7 @@ dependencies = [
     "click~=8.1",
     "faiss-gpu~=1.7",
     "fastdtw~=0.3",
+    "gradio>=3.33.1",
     "inaspeechsegmenter~=0.7",
     "librosa~=0.9",
     "lightning~=2.0",
@@ -21,9 +22,10 @@ dependencies = [
     "phonemizer~=3.2",
     "pysoundfile~=0.9",
     "resampy~=0.4",
+    "speechbrain>=0.5.14",
     "speechmetrics[cpu] @ git+https://github.com/aliutkus/speechmetrics",
-    "torch~=2.0",
-    "torchaudio~=2.0",
+    "torch>=2.1.0.dev20230606",
+    "torchaudio>=2.1.0.dev20230606",
     "torchcrepe~=0.0",
     "tqdm~=4.65",
     "transformers~=4.29",
@@ -40,7 +42,7 @@ dev = [
 
 [[tool.pdm.source]]
 name = "pytorch-cu118"
-url = "https://download.pytorch.org/whl/cu118"
+url = "https://download.pytorch.org/whl/nightly/cu118"
 verify_ssl = true
 
 [tool.pdm.build]
