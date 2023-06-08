@@ -58,9 +58,7 @@ class VCModel(nn.Module):
     self.w2v2_embed = nn.Linear(768, w2v2_dim)
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
-        Transpose(1, 2),
-        nn.Conv1d(energy_dim + pitch_dim + w2v2_dim, hdim, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
@@ -73,9 +71,7 @@ class VCModel(nn.Module):
     self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         # input: (batch, src_len, hdim)
-        Transpose(1, 2),
-        nn.Conv1d(energy_dim + pitch_dim + mel_dim, hdim, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(energy_dim + pitch_dim + mel_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
@@ -94,9 +90,7 @@ class VCModel(nn.Module):
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, 80, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(hdim, 80),
     )
 
   def forward_energy(self, energy_i: Tensor):
@@ -115,7 +109,7 @@ class VCModel(nn.Module):
     return self.encode_key(torch.cat([energy, pitch, w2v2], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
-    return self.encode_value(torch.cat([energy, pitch, mel], dim=-1))
+    return self.encode_value(torch.cat([energy, mel], dim=-1))
 
   def forward(self, o: VCInputs):
 

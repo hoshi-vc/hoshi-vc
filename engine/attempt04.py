@@ -56,9 +56,7 @@ class VCModel(nn.Module):
     self.phoneme_embed = nn.Embedding(400, phoneme_dim)
     self.encode_key = nn.Sequential(
         # input: (batch, src_len, hdim)
-        Transpose(1, 2),
-        nn.Conv1d(energy_dim + pitch_dim + phoneme_dim, hdim, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(energy_dim + pitch_dim + phoneme_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
         nn.RNN(hdim, hdim, batch_first=True),
@@ -75,9 +73,7 @@ class VCModel(nn.Module):
     self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         # input: (batch, src_len, hdim)
-        Transpose(1, 2),
-        nn.Conv1d(energy_dim + pitch_dim + mel_dim, hdim, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(energy_dim + pitch_dim + mel_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
@@ -96,9 +92,7 @@ class VCModel(nn.Module):
         Transpose(1, 2),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, 80, kernel_size=1),
-        Transpose(1, 2),
+        nn.Linear(hdim, 80),
     )
 
   def forward_energy(self, energy_i: Tensor):
