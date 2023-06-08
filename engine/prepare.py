@@ -23,7 +23,7 @@ from tqdm import tqdm
 from engine.lib.dataset_jvs import JVS, JVSCategory
 from engine.lib.feats import Audio, Energy, MelSpec, Phoneme, Pitch, Wav2Vec2
 from engine.lib.trim import trim_silence
-from engine.lib.utils import (DATA_DIR, Device, NPArray, hide_warns, make_parents, np_safesave)
+from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
 
 PITCH_TOPK = 8
@@ -48,10 +48,8 @@ class Preparation:
 
   def normalize_audio(self, audio: Tensor, sr: int, trim=True, normalize=True):
     device = self.device
-    audio = audio.numpy()
     if trim: audio = trim_silence(audio, sr)
-    if normalize: audio = librosa.util.normalize(audio) * 0.95
-    audio = torch.as_tensor(audio, device=device)
+    if normalize: audio = torch.as_tensor(librosa.util.normalize(audio.numpy()), device=device) * 0.95
     return audio
 
   @cached_property
@@ -212,19 +210,21 @@ class Preparation:
     return HiFiGAN.load(DATA_DIR / "vocoder", download=True).to(self.device)
 
   @cached_property
-  def spksim(self):
+  def spkemb(self):
     classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir=DATA_DIR / "spkrec", run_opts={"device": self.device})
 
-    def similarity(y: Tensor, y_hat: Tensor, sr: int) -> Tensor:
+    def embed(y: Tensor, sr: int) -> Tensor:
       y = y.to(self.device)
-      y_hat = y_hat.to(self.device)
       y = resample(y, sr, 16000)
-      y_hat = resample(y_hat, sr, 16000)
       y_emb = classifier.encode_batch(y).squeeze(1)
-      y_hat_emb = classifier.encode_batch(y_hat).squeeze(1)
-      return F.cosine_similarity(y_emb, y_hat_emb).mean()
+      return y_emb
 
-    return similarity
+    return embed
+
+  def spksim(self, y: Tensor, y_hat: Tensor, sr: int) -> Tensor:
+    y_emb = self.spkemb(y, sr)
+    y_hat_emb = self.spkemb(y_hat, sr)
+    return F.cosine_similarity(y_emb, y_hat_emb).mean()
 
   @cached_property
   def mosnet(self):
@@ -240,6 +240,14 @@ class Preparation:
       return np.mean(scores)
 
     return mosnet
+
+  def release_spkemb(self):
+    if "spkemb" in self.__dict__:
+      del self.__dict__["spkemb"]
+
+  def release_mosnet(self):
+    if "mosnet" in self.__dict__:
+      del self.__dict__["mosnet"]
 
 if __name__ == "__main__":
   P = Preparation("cuda")

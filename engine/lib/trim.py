@@ -6,9 +6,13 @@
 # %%
 import librosa
 import numpy as np
-from resampy import resample
+import torch
+from torch import Tensor
+from torchaudio.functional import resample
 
 from engine.lib.utils import NPArray, clamp
+
+# TODO: Pytorch で書き直したい
 
 def erode(mask: NPArray, amount: int = 1):  # mask の中の True の部分を収縮する。
   for _ in range(amount):
@@ -23,16 +27,17 @@ def dilate(mask: NPArray, amount: int = 1):  # mask の中の True の部分を�
   return mask
 
 def trim_silence(
-    audio: NPArray,
+    audio: Tensor,
     sr: int,
     mode="split-join",
     top_db=40.0,
     frame_length=2048,
     hop_length=512,
-) -> NPArray:
+) -> Tensor:
 
   # とりあえず正規化しておく
-  normalized = librosa.util.normalize(resample(audio, sr, 44100))
+  # resampy だと遅いので、torchaudio で resample する。
+  normalized = librosa.util.normalize(resample(audio, sr, 44100).numpy())
   conv_sr = lambda frame: clamp(int(frame * sr / 44100), 0, len(audio))
 
   # librosa の trim のコードが使っていた処理でデシベル値を得る。
@@ -87,7 +92,7 @@ def trim_silence(
 
       out.append(audio[conv_sr(start):conv_sr(end)])
 
-    return np.concatenate(out)
+    return torch.cat(out)
 
   else:
     raise ValueError(f"Unknown mode: {mode}")
@@ -101,7 +106,7 @@ if __name__ == "__main__":
   P = Preparation("cpu")
   item = P.dataset[100]
 
-  audio_trimmed = trim_silence(item.audio[0].numpy(), item.sr)
+  audio_trimmed = trim_silence(item.audio[0], item.sr)
 
   print(item.name, len(item.audio[0]), len(audio_trimmed))
   play_audio(item.audio, item.sr)
