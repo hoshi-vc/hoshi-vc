@@ -3,6 +3,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+# %%
 import librosa
 import numpy as np
 from resampy import resample
@@ -25,14 +26,14 @@ def trim_silence(
     audio: NPArray,
     sr: int,
     mode="split-join",
-    top_db=30.0,
+    top_db=40.0,
     frame_length=2048,
     hop_length=512,
 ) -> NPArray:
 
   # とりあえず正規化しておく
-  normalized = librosa.util.normalize(resample(audio, sr, 16000))
-  conv_sr = lambda frame: clamp(int(frame * sr / 16000), 0, len(audio))
+  normalized = librosa.util.normalize(resample(audio, sr, 44100))
+  conv_sr = lambda frame: clamp(int(frame * sr / 44100), 0, len(audio))
 
   # librosa の trim のコードが使っていた処理でデシベル値を得る。
   mse = librosa.feature.rms(y=normalized, frame_length=frame_length, hop_length=hop_length)
@@ -40,16 +41,16 @@ def trim_silence(
 
   mask = db > -top_db  # 音がある部分を True にする。
 
-  # # 話し始めや話し終わりの部分の無音区間を含める
-  mask = dilate(mask, 10)
-
-  # # 短い無音区間を塞ぐ
+  # 短い無音区間を塞ぐ : 促音とかを残す -- jvs/jvs001/parallel100/VOICEACTRESS100_062 など
   mask = dilate(mask, 10)
   mask = erode(mask, 10)
 
-  # # 短い音声区間を除去する
+  # 短い音声区間を除去 : クリック音とかを消す -- jvs/jvs009/parallel100/VOICEACTRESS100_086 など
   mask = erode(mask, 10)
   mask = dilate(mask, 10)
+
+  # 話し始めや話し終わりの部分の余韻を含める
+  mask = dilate(mask, 5)
 
   if mode == "trim":
     nonzero, = np.where(mask)
@@ -90,3 +91,20 @@ def trim_silence(
 
   else:
     raise ValueError(f"Unknown mode: {mode}")
+
+# %%
+if __name__ == "__main__":
+  from torch import as_tensor as T
+
+  from engine.lib.utils_ui import play_audio, plot_spectrogram
+  from engine.prepare import Preparation
+  P = Preparation("cpu")
+  item = P.dataset[100]
+
+  audio_trimmed = trim_silence(item.audio[0].numpy(), item.sr)
+
+  print(item.name, len(item.audio[0]), len(audio_trimmed))
+  play_audio(item.audio, item.sr)
+  play_audio(audio_trimmed, item.sr)
+  plot_spectrogram(P.extract_melspec(item.audio[0], item.sr), factor=2.0)
+  plot_spectrogram(P.extract_melspec(T(audio_trimmed), item.sr), factor=2.0)

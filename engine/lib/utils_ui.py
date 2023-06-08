@@ -7,8 +7,10 @@ import matplotlib.pyplot as plt
 from IPython.display import Audio, display
 from torch import Tensor
 
-def plot_specgram(audio: Tensor, sr: int, title="Spectrogram", xlim=None):
-  audio = audio.cpu().numpy()
+from engine.lib.utils import NPArray
+
+def plot_specgram(audio: Tensor | NPArray, sr: int, title="Spectrogram", xlim=None):
+  if isinstance(audio, Tensor): audio = audio.cpu().numpy()
 
   num_channels, _ = audio.shape
 
@@ -24,11 +26,11 @@ def plot_specgram(audio: Tensor, sr: int, title="Spectrogram", xlim=None):
   figure.suptitle(title)
   plt.show(block=False)
 
-def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin"):
+def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin", *, factor=1.0):
   specgram = specgram.cpu()
 
   fig, axs = plt.subplots(1, 1)
-  fig.set_size_inches(10, 3)
+  fig.set_size_inches(10 * factor, 3 * factor)
 
   axs.set_title(title or "Spectrogram")
   axs.set_ylabel(ylabel)
@@ -37,8 +39,8 @@ def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin"):
   fig.colorbar(im, ax=axs)
   plt.show(block=False)
 
-def play_audio(audio: Tensor, sr: int, normalize=False):
-  audio = audio.cpu().numpy()
+def play_audio(audio: Tensor | NPArray, sr: int, normalize=False):
+  if isinstance(audio, Tensor): audio = audio.cpu().numpy()
 
   if audio.ndim == 1: audio = audio[None, :]
 
