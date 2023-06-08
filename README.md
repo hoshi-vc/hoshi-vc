@@ -95,6 +95,11 @@ FragmentVC がなぜかうまくいかなかったので、新しくモデルを
 
 <!-- TODO: Write more details, results, observations, and conclusions. -->
 
+## Notes
+
+- リファレンス音声を参照する関係で、大量のディスクアクセスを行う
+  - ページキャッシュの開放: `sudo sh -c 'echo 1 >/proc/sys/vm/drop_caches'`
+
 ## 参考にしたものなど
 
 - [Faiss](https://github.com/facebookresearch/faiss) (efficient similarity search)

@@ -29,12 +29,12 @@ def new_wandb_logger(project: str):
   (DATA_DIR / "wandb").mkdir(parents=True, exist_ok=True)
   return WandbLogger(entity="hoshi-vc", project=project, save_dir=DATA_DIR)
 
-def new_checkpoint_callback(project: str, run_path: str, **kwargs):
+def new_checkpoint_callback(project: str, run_path: str, filename="{step:08d}-{valid_loss:.4f}", monitor="valid_loss", mode="min", **kwargs):
   return C.ModelCheckpoint(
       dirpath=DATA_DIR / project / "checkpoints" / run_path,
-      filename="{step:08d}-{valid_loss:.4f}",
-      monitor="valid_loss",
-      mode="min",
+      filename=filename,
+      monitor=monitor,
+      mode=mode,
       save_top_k=3,
       save_last=True,
       **kwargs,

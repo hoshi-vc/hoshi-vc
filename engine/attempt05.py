@@ -5,7 +5,6 @@
 
 # %%
 
-import json
 from math import ceil
 from pathlib import Path
 from random import Random
@@ -21,14 +20,16 @@ import wandb
 from lightning.pytorch import profilers
 from torch import Tensor, nn
 from torch.optim import AdamW
+from torchaudio.functional import resample
 from wandb.wandb_run import Run
 
 import engine.hifi_gan.models as VOC
 from engine.dataset_feats import IntraDomainDataModule4, IntraDomainEntry4
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
+from engine.lib.fastspeech import PosFFT
 from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
-from engine.lib.utils import DATA_DIR, AttrDict, clamp
+from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
 from engine.utils import (log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
@@ -57,7 +58,6 @@ class VCModel(nn.Module):
     self.pitch_embed = nn.Embedding(360, pitch_dim)
     self.w2v2_embed = nn.Linear(768, w2v2_dim)
     self.encode_key = nn.Sequential(
-        # input: (batch, src_len, hdim)
         nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
@@ -70,8 +70,7 @@ class VCModel(nn.Module):
 
     self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
-        # input: (batch, src_len, hdim)
-        nn.Linear(energy_dim + pitch_dim + mel_dim, hdim),
+        nn.Linear(energy_dim + mel_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
@@ -81,15 +80,11 @@ class VCModel(nn.Module):
         nn.LayerNorm(hdim),
     )
 
-    self.lookup = nn.MultiheadAttention(hdim, 4, batch_first=True)
+    self.lookup = nn.MultiheadAttention(hdim, 4, dropout=0.2, batch_first=True)
 
     self.decode = nn.Sequential(
-        # input: (batch, src_len, hdim + energy_dim + pitch_dim)
-        Transpose(1, 2),
-        nn.Conv1d(hdim + energy_dim + pitch_dim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
+        nn.Linear(hdim + energy_dim + pitch_dim, hdim),
+        PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
         nn.Linear(hdim, 80),
     )
 
@@ -176,6 +171,8 @@ class VCModule(L.LightningModule):
     self.hifi_gan = hifi_gan
     self.hifi_gan_ckpt = hifi_gan_ckpt
 
+    self.val_outputs = []
+
     self.save_hyperparameters()
 
     # NOTE: activates manual optimization.
@@ -235,7 +232,7 @@ class VCModule(L.LightningModule):
 
     # NOTE: step 0 ではバグ確認のためすべてのロスを使って backward する。
     debug = step == 0 and train
-    if debug: print('process_batch: debug mode')
+    # if debug: print('process_batch: debug mode')
 
     # inputs
     mel = batch[0].mel
@@ -267,12 +264,12 @@ class VCModule(L.LightningModule):
     total_club = club_val + club_key
 
     if train:
-      opt_club.zero_grad()
       self.toggle_optimizer(opt_club)
+      opt_club.zero_grad()
       self.manual_backward(total_club, retain_graph=True)
-      self.untoggle_optimizer(opt_club)
       self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
       opt_club.step()
+      self.untoggle_optimizer(opt_club)
 
     if log:
       self.log(f"{log}_mi_val", mi_val)
@@ -301,7 +298,7 @@ class VCModule(L.LightningModule):
       e2e_mel_hat = mel_hat[:, e2e_start:e2e_end].transpose(1, 2)
 
       y_g_hat = self.vocoder(e2e_mel_hat)
-      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000)
+      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000, fast=True)
 
       # discriminator
 
@@ -314,12 +311,12 @@ class VCModule(L.LightningModule):
       total_disc = loss_disc_s + loss_disc_f
 
       if train:
-        opt_d.zero_grad()
         self.toggle_optimizer(opt_d)
-        self.manual_backward(total_disc, retain_graph=True)
-        self.untoggle_optimizer(opt_d)
+        opt_d.zero_grad()
+        self.manual_backward(total_disc)
         self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
-        opt_d.step()
+        opt_d.step()  # この行をコメントアウトしない場合、 e2e_milestones[0] 以降で generator のスコアも一気に低下していた。
+        self.untoggle_optimizer(opt_d)
 
       if log:
         self.log(f"{log}_loss_disc", total_disc)
@@ -357,13 +354,15 @@ class VCModule(L.LightningModule):
 
     # generator
 
+    total_model += 0.01 * mi_val
+
     if train:
-      opt_model.zero_grad()
       self.toggle_optimizer(opt_model)
+      opt_model.zero_grad()
       self.manual_backward(total_model)
-      self.untoggle_optimizer(opt_model)
       self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
       opt_model.step()
+      self.untoggle_optimizer(opt_model)
 
     if log:
       self.log(f"{log}_loss", total_model)
@@ -388,9 +387,10 @@ class VCModule(L.LightningModule):
 
     self._process_batch(batch, self_ratio, ref_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
 
-    sch_club.step()
-    sch_model.step()
-    if step % 25000 == 0: sch_d.step()  # 25000: do_02500000 の steps/epoch
+    with hide_warns():
+      sch_club.step()
+      sch_model.step()
+      if step % 25000 == 0: sch_d.step()  # 25000: do_02500000 の steps/epoch
 
   def validation_step(self, batch: IntraDomainEntry4, batch_idx: int):
     step = self.batches_that_stepped()
@@ -398,13 +398,28 @@ class VCModule(L.LightningModule):
     y = batch[0].audio
 
     # vcheat: validation with cheating
-    _, y_c, _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="vcheat")
-    _, y_v, _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="valid")
+    complex_metrics = batch_idx < complex_metrics_batches
+    e2e = batch_idx == 0 or complex_metrics or step >= self.e2e_milestones[0]
+    _, y_c, _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
+    _, y_v, _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
 
-    self.log("valid_mos", P.mosnet(y_v, 22050))
-    self.log("vcheat_mos", P.mosnet(y_c, 22050))
-    self.log("valid_spksim", P.spksim(y, y_v, 22050))
-    self.log("vcheat_spksim", P.spksim(y, y_c, 22050))
+    # MOSNet を入れるとモデルの学習が非常に遅くなる
+    # 多分メモリ不足によるものだけど、そこまでするほど MOSNet が正確なのか知らない
+    # どうやら x-vector cos sim のほうが MOS との相関が強かったらしいし
+    # see: https://www.isca-speech.org/archive_v0/VCC_BC_2020/pdfs/VCC2020_paper_34.pdf
+
+    if complex_metrics:
+      y_16k = resample(y, 22050, 16000)
+      y_v_16k = resample(y_v, 22050, 16000)
+      y_c_16k = resample(y_c, 22050, 16000)
+      y_spkemb = P.spkemb(y_16k, 16000)
+      y_v_spkemb = P.spkemb(y_v_16k, 16000)
+      y_c_spkemb = P.spkemb(y_c_16k, 16000)
+      v_spksim = F.cosine_similarity(y_spkemb, y_v_spkemb).mean()
+      c_spksim = F.cosine_similarity(y_spkemb, y_c_spkemb).mean()
+      self.log("valid_spksim", v_spksim)
+      self.log("vcheat_spksim", c_spksim)
+      self.val_outputs.append({"valid_spksim": v_spksim, "vcheat_spksim": c_spksim})
 
     if batch_idx == 0:
       mel_c, y_c, ymel_c = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
@@ -413,6 +428,21 @@ class VCModule(L.LightningModule):
       log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
       log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
       log_audios2(self, P, names, 22050, y, y_v, y_c)
+
+  def on_validation_epoch_end(self):
+    if len(self.val_outputs) > 0:
+      v_spksim = torch.stack([x["valid_spksim"] for x in self.val_outputs]).cpu().numpy()
+      c_spksim = torch.stack([x["vcheat_spksim"] for x in self.val_outputs]).cpu().numpy()
+      self.log_wandb({"Spksim/valid_hist": wandb.Histogram(v_spksim)})
+      self.log_wandb({"Spksim/vcheat_hist": wandb.Histogram(c_spksim)})
+
+    self.val_outputs.clear()
+
+  def on_validation_end(self):
+    pass  # メモリが足りなかったら使うかも
+    # P.release_spkemb()
+    # P.release_mosnet()
+    # torch.cuda.empty_cache()
 
   def configure_optimizers(self):
     h = self.hifi_gan
@@ -465,9 +495,10 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=7, batch_size=8, n_batches=1000, n_batches_val=200)
+  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=15, batch_size=8, n_batches=1000, n_batches_val=200)
 
   total_steps = 30000
+  complex_metrics_batches = 50  # see: validation_step
 
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
   do_ckpt = DATA_DIR / "vocoder" / "do_02500000"
@@ -478,10 +509,10 @@ if __name__ == "__main__":
       lr_club=1e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 4000, 10000),
-      e2e_milestones=(10000, 12000, 20000),
+      milestones=(0, 1, 4000, 8000),
+      e2e_milestones=(10000, 12000, 14000),
       e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
-      grad_clip=0.5,
+      grad_clip=1.0,
       hifi_gan=AttrDict({
           "resblock": "1",
           "learning_rate": 0.0002,
@@ -520,7 +551,13 @@ if __name__ == "__main__":
       max_epochs=int(ceil(total_steps / datamodule.n_batches)),
       logger=wandb_logger,
       callbacks=[
-          new_checkpoint_callback_wandb(PROJECT, wandb_logger),
+          new_checkpoint_callback_wandb(
+              PROJECT,
+              wandb_logger,
+              filename="{step:08d}-{valid_spksim:.4f}-{vcheat_spksim:.4f}",
+              monitor="valid_spksim",
+              mode="max",
+          ),
       ],
       accelerator="gpu",
       precision="16-mixed",

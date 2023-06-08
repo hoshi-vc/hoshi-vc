@@ -1,0 +1,21 @@
+# Copyright 2023 Hoshi-VC Developer <hoshi-vc@o137.net>.
+#
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# %%
+
+import gradio as gr
+
+# https://gradio.app/docs/
+
+def convert(audio):
+  return "Hello, world!"
+
+gr.Interface(
+    fn=convert,
+    inputs=[
+        gr.Audio(),
+    ],
+    outputs="text",
+).launch()
