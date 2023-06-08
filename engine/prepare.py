@@ -49,6 +49,7 @@ class Preparation:
   def normalize_audio(self, audio: Tensor, sr: int, trim=True, normalize=True):
     device = self.device
     if trim: audio = trim_silence(audio, sr)
+    if len(audio) == 0: return audio
     if normalize: audio = torch.as_tensor(librosa.util.normalize(audio.numpy()), device=device) * 0.95
     return audio
 
@@ -110,6 +111,7 @@ class Preparation:
           # normalize
           audio, sr = item.audio[0], item.sr
           audio = self.normalize_audio(audio, sr)
+          if len(audio) == 0: continue
 
           # extract features
           audio_feat = self.extract_audio(audio, sr)

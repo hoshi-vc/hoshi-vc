@@ -58,9 +58,9 @@ class Audio:  # (feat_len * 256,)
     audio, sr = to22050(audio, sr)
     flen = feat_len(audio, sr)
 
-    out = audio[:flen * 256].float()
+    out = audio[:flen * 256].to(torch.float16)
 
-    assert_torch(out, torch.float32, flen * 256)
+    assert_torch(out, torch.float16, flen * 256)
     return out
 
 class MelSpec:  # (feat_len, 80)
@@ -69,9 +69,9 @@ class MelSpec:  # (feat_len, 80)
     flen = feat_len(audio, sr)
 
     mel = mel_spectrogram(audio.unsqueeze(0), sampling_rate=sr, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000)
-    mel = mel[0].transpose(0, 1).float()
+    mel = mel[0].transpose(0, 1).to(torch.float16)
 
-    assert_torch(mel, torch.float32, flen, 80)
+    assert_torch(mel, torch.float16, flen, 80)
     return mel
 
 class Energy:  # (feat_len, 1)
@@ -80,9 +80,9 @@ class Energy:  # (feat_len, 1)
     flen = feat_len(audio, sr)
 
     mel = MelSpec()(audio, sr)
-    energy = torch.mean(mel, dim=1).unsqueeze(-1).float()
+    energy = torch.mean(mel, dim=1).unsqueeze(-1).to(torch.float16)
 
-    assert_torch(energy, torch.float32, flen, 1)
+    assert_torch(energy, torch.float16, flen, 1)
     return energy
 
 class Pitch:  # indices, values : (feat_len, topk), (feat_len, topk)
@@ -100,14 +100,14 @@ class Pitch:  # indices, values : (feat_len, topk), (feat_len, topk)
       matrix = torchcrepe.infer(batch, model=self.model)
       pitch = matrix.topk(self.topk)
       indices = pitch.indices
-      values = pitch.values.float()
+      values = pitch.values.to(torch.float16)
 
     # "replication_pad1d_cuda" not implemented for 'Short', 'Long' なので。
-    indices = pad_clip(indices.float(), flen, max_diff=2).to(torch.int16)
+    indices = pad_clip(indices.to(torch.float16), flen, max_diff=2).to(torch.int16)
     values = pad_clip(values, flen, max_diff=2)
 
     assert_torch(indices, torch.int16, flen, self.topk)
-    assert_torch(values, torch.float32, flen, self.topk)
+    assert_torch(values, torch.float16, flen, self.topk)
     return indices, values
 
   def _torchcrepe_preprocess(self, audio, sample_rate, hop_length, batch_size=None, device='cpu', pad=True):
@@ -172,14 +172,14 @@ class Wav2Vec2:  # (feat_len, 768)
       inputs = F.pad(inputs, (40, 40))
       inputs = self.preprocessor(inputs, sampling_rate=16000, return_tensors="pt").input_values.to(self.device)
       outputs = self.model(inputs)
-      w2v2 = outputs.last_hidden_state[0].float()
+      w2v2 = outputs.last_hidden_state[0].to(torch.float16)
 
     # 長さを調節する前に、予想通りの縮小率になっていることを確認する
     assert abs(len(w2v2) * 320 / 16000 - flen * 256 / 22050) <= 0.02
 
     w2v2 = interp_nearest(w2v2, flen)
 
-    assert_torch(w2v2, torch.float32, flen, 768)
+    assert_torch(w2v2, torch.float16, flen, 768)
     return w2v2
 
   def to(self, device: torch.device):
@@ -219,18 +219,18 @@ class Phoneme:  # indices, logits : (feat_len, topk), (feat_len, topk)
       log_probs = F.log_softmax(outputs.logits, dim=-1)
       k_logits, k_indice = torch.topk(log_probs, k=self.topk, dim=-1)
       k_indice = k_indice[0]
-      k_logits = k_logits[0].float()
+      k_logits = k_logits[0].to(torch.float16)
 
     # 長さを調節する前に、予想通りの縮小率になっていることを確認する
     assert abs(len(k_indice) * 320 / 16000 - flen * 256 / 22050) <= 0.02
     assert abs(len(k_logits) * 320 / 16000 - flen * 256 / 22050) <= 0.02
 
     # "upsample_nearest1d_out_frame" not implemented for 'Short', 'Long' なので。
-    k_indice = interp_nearest(k_indice.float(), flen).to(torch.int16)
+    k_indice = interp_nearest(k_indice.to(torch.float16), flen).to(torch.int16)
     k_logits = interp_nearest(k_logits, flen)
 
     assert_torch(k_indice, torch.int16, flen, self.topk)
-    assert_torch(k_logits, torch.float32, flen, self.topk)
+    assert_torch(k_logits, torch.float16, flen, self.topk)
     return k_indice, k_logits
 
   def to(self, device: torch.device):
