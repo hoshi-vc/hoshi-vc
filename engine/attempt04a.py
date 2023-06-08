@@ -24,6 +24,7 @@ from wandb.wandb_run import Run
 
 from engine.dataset_feats import IntraDomainDataModule3, IntraDomainEntry3
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
+from engine.lib.fastspeech import PosFFT
 from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
 from engine.lib.utils import clamp
 from engine.prepare import Preparation
@@ -82,11 +83,8 @@ class VCModel(nn.Module):
 
     self.decode = nn.Sequential(
         # input: (batch, src_len, hdim + energy_dim + pitch_dim)
-        Transpose(1, 2),
-        nn.Conv1d(hdim + energy_dim + pitch_dim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
+        nn.Linear(hdim + energy_dim + pitch_dim, hdim),
+        PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
         nn.Linear(hdim, 80),
     )
 
