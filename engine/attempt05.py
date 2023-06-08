@@ -398,16 +398,21 @@ class VCModule(L.LightningModule):
     y = batch[0].audio
 
     # vcheat: validation with cheating
-    self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, log="vcheat")
-    self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, log="valid")
+    _, y_c, _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="vcheat")
+    _, y_v, _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=self.e2e_frames, log="valid")
+
+    self.log("valid_mos", P.mosnet(y_v, 22050))
+    self.log("vcheat_mos", P.mosnet(y_c, 22050))
+    self.log("valid_spksim", P.spksim(y, y_v, 22050))
+    self.log("vcheat_spksim", P.spksim(y, y_c, 22050))
 
     if batch_idx == 0:
-      mel_hat_cheat, y_hat_cheat, y_hat_mel_cheat = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
-      mel_hat, y_hat, y_hat_mel = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
+      mel_c, y_c, ymel_c = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
+      mel_v, y_v, ymel_v = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
       names = [f"{i:02d}" for i in range(8)]
-      log_spectrograms(self, names, mel, mel_hat_cheat, y_hat_mel_cheat, "Spectrogram (Cheat)")
-      log_spectrograms(self, names, mel, mel_hat, y_hat_mel, "Spectrogram")
-      log_audios2(self, P, names, 22050, y, y_hat, y_hat_cheat)
+      log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
+      log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
+      log_audios2(self, P, names, 22050, y, y_v, y_c)
 
   def configure_optimizers(self):
     h = self.hifi_gan

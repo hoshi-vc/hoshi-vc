@@ -11,15 +11,19 @@ from pathlib import Path
 import faiss
 import librosa
 import numpy as np
+import speechmetrics
 import torch
+import torch.nn.functional as F
 from autofaiss import build_index
+from speechbrain.pretrained import EncoderClassifier
 from torch import Tensor
+from torchaudio.functional import resample
 from tqdm import tqdm
 
 from engine.lib.dataset_jvs import JVS, JVSCategory
 from engine.lib.feats import Audio, Energy, MelSpec, Phoneme, Pitch, Wav2Vec2
 from engine.lib.trim import trim_silence
-from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
+from engine.lib.utils import (DATA_DIR, Device, NPArray, hide_warns, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
 
 PITCH_TOPK = 8
@@ -206,6 +210,36 @@ class Preparation:
   @cached_property
   def vocoder(self):
     return HiFiGAN.load(DATA_DIR / "vocoder", download=True).to(self.device)
+
+  @cached_property
+  def spksim(self):
+    classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir=DATA_DIR / "spkrec", run_opts={"device": self.device})
+
+    def similarity(y: Tensor, y_hat: Tensor, sr: int) -> Tensor:
+      y = y.to(self.device)
+      y_hat = y_hat.to(self.device)
+      y = resample(y, sr, 16000)
+      y_hat = resample(y_hat, sr, 16000)
+      y_emb = classifier.encode_batch(y).squeeze(1)
+      y_hat_emb = classifier.encode_batch(y_hat).squeeze(1)
+      return F.cosine_similarity(y_emb, y_hat_emb).mean()
+
+    return similarity
+
+  @cached_property
+  def mosnet(self):
+    metrics = speechmetrics.load('absolute.mosnet')
+
+    def mosnet(y: Tensor, sr: int) -> float:
+      y = resample(y, sr, 16000)
+
+      scores: list[NPArray] = []
+      for i in range(len(y)):
+        scores.append(metrics(y[i].cpu().numpy(), rate=16000)["mosnet"])
+
+      return np.mean(scores)
+
+    return mosnet
 
 if __name__ == "__main__":
   P = Preparation("cuda")
