@@ -59,15 +59,69 @@ class JVS(Dataset[JVSEntry]):
                          "Please check the ``root`` path or set `download=True` to download it")
 
     self._path = path.join(data_dir, "jvs_ver1")
-    self._walker = sorted(str(p.relative_to(self._path)) for p in Path(self._path).glob("*/*/wav24kHz16bit/*.wav"))
-    self._walker = [Path(p) for p in self._walker]
 
+    files = sorted(str(p.relative_to(self._path)) for p in Path(self._path).glob("*/*/wav24kHz16bit/*.wav"))
+    files = [Path(p) for p in files]
+    entries: list[tuple[Path, str, str, str]] = []
+    for filepath in files:
+      (speaker_id, category_id, _, _) = filepath.parts
+      utterance_id = filepath.stem
+      entries.append((filepath, speaker_id, category_id, utterance_id))
+
+    # 既知のミスがあるらしいので、パッチする
+    # https://github.com/Hiroshiba/jvs_hiho/blob/cc72484e286a1d9a209118c8153a6a32e4c3c9ec/audio.bash
+
+    patched: list[tuple[Path, str, str, str, str]] = []
+    for (filepath, speaker_id, category_id, utterance_id) in entries:
+      name = f"jvs/{speaker_id}/{category_id}/{utterance_id}"
+      remove = False
+
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_021": utterance_id = "VOICEACTRESS100_022"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_020": utterance_id = "VOICEACTRESS100_021"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_019": utterance_id = "VOICEACTRESS100_020"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_018": utterance_id = "VOICEACTRESS100_019"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_017": utterance_id = "VOICEACTRESS100_018"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_016": utterance_id = "VOICEACTRESS100_017"
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_015": utterance_id = "VOICEACTRESS100_016"
+      if name == "jvs/jvs009/parallel100/VOICEACTRESS100_086": remove = True
+      if name == "jvs/jvs009/parallel100/VOICEACTRESS100_095": remove = True
+      if name == "jvs/jvs017/parallel100/VOICEACTRESS100_082": remove = True
+      if name == "jvs/jvs018/parallel100/VOICEACTRESS100_072": remove = True
+      if name == "jvs/jvs022/parallel100/VOICEACTRESS100_047": remove = True
+      if name == "jvs/jvs024/parallel100/VOICEACTRESS100_088": remove = True
+      if name == "jvs/jvs036/parallel100/VOICEACTRESS100_057": remove = True
+      if name == "jvs/jvs038/parallel100/VOICEACTRESS100_006": remove = True
+      if name == "jvs/jvs038/parallel100/VOICEACTRESS100_041": remove = True
+      if name == "jvs/jvs043/parallel100/VOICEACTRESS100_085": remove = True
+      if name == "jvs/jvs047/parallel100/VOICEACTRESS100_085": remove = True
+      if name == "jvs/jvs048/parallel100/VOICEACTRESS100_043": remove = True
+      if name == "jvs/jvs048/parallel100/VOICEACTRESS100_076": remove = True
+      if name == "jvs/jvs051/parallel100/VOICEACTRESS100_025": remove = True
+      if name == "jvs/jvs055/parallel100/VOICEACTRESS100_056": remove = True
+      if name == "jvs/jvs055/parallel100/VOICEACTRESS100_076": remove = True
+      if name == "jvs/jvs055/parallel100/VOICEACTRESS100_099": remove = True
+      if name == "jvs/jvs058/parallel100/VOICEACTRESS100_014": remove = True
+      if name == "jvs/jvs059/parallel100/VOICEACTRESS100_061": remove = True
+      if name == "jvs/jvs059/parallel100/VOICEACTRESS100_064": remove = True
+      if name == "jvs/jvs059/parallel100/VOICEACTRESS100_066": remove = True
+      if name == "jvs/jvs059/parallel100/VOICEACTRESS100_074": remove = True
+      if name == "jvs/jvs060/parallel100/VOICEACTRESS100_082": remove = True
+      if name == "jvs/jvs074/parallel100/VOICEACTRESS100_062": remove = True
+      if name == "jvs/jvs098/parallel100/VOICEACTRESS100_060": remove = True
+      if name == "jvs/jvs098/parallel100/VOICEACTRESS100_099": remove = True
+
+      prev_name = name
+      name = f"jvs/{speaker_id}/{category_id}/{utterance_id}"
+
+      # if prev_name != name: print(f"patched: {prev_name} -> {name}")
+      # if remove: print(f"removed: {name}")
+      if not remove: patched.append((filepath, name, speaker_id, category_id, utterance_id))
+
+    self._entries = patched
     self._no_audio = no_audio
 
   def __getitem__(self, n: int) -> JVSEntry:
-    filepath = self._walker[n]
-    (speaker_id, category_id, _, utterance_id) = filepath.parts
-    name = f"jvs/{speaker_id}/{category_id}/{utterance_id}"
+    (filepath, name, speaker_id, category_id, utterance_id) = self._entries[n]
     if self._no_audio:
       audio, sr = None, None
     else:
@@ -75,4 +129,4 @@ class JVS(Dataset[JVSEntry]):
     return JVSEntry(audio, sr, name, speaker_id, category_id, utterance_id)
 
   def __len__(self) -> int:
-    return len(self._walker)
+    return len(self._entries)
