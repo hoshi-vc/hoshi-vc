@@ -1,7 +1,6 @@
-This README is currently only available in Japanese.
-Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hoshi-vc/blob/main/README.md?_x_tr_sl=ja&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp) if necessary.
+English version: [README.md](README.md)
 
-<!-- Note: Translations are welcome. (although this documentation is still incomplete...) -->
+<!-- Note: Translations are welcome. -->
 
 <br>
 <div align="center">
@@ -19,25 +18,25 @@ Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hosh
 Linux や WSL2 での開発を想定しています。
 
 ```bash
-# Install `asdf` and `pnpm` before you start if you haven't already.
+# インストールしていない場合は `asdf` と `pnpm` を入れておいてください。
 # asdf: https://asdf-vm.com/guide/getting-started.html
 # pnpm: https://pnpm.io/installation
 
-# Clone this repository.
+# このレポジトリをクローンします。
 git clone https://github.com/hoshi-vc/hoshi-vc.git
 cd hoshi-vc
 
-# Install the required tools and packages.
+# 必要なツールなどをインストールします。
 asdf install
 pdm  install -G :all
 pnpm install
 
-# Now you are ready to go!
+# これで準備完了です！
 source .venv/bin/activate
 python engine/prepare.py
 ```
 
-Note: `requirements.txt` は最新に保たれているはずなので、それを使ってもいいです。
+Note: `requirements.txt` は最新に保たれているので、それを使ってもいいです。
 
 <!-- TODO: 環境構築の方法だけじゃなくて、学習の走らせ方などまで書きたい。 -->
 
@@ -87,35 +86,30 @@ FragmentVC がなぜかうまくいかなかったので、新しくモデルを
 
 学習に GAN を取り入れると melspectrogram l1 loss が性能評価に適さなくなるので、指標を増やす。
 
-- [MOSNet](https://github.com/aliutkus/speechmetrics#mosnet-absolutemosnet-or-mosnet) : mean opinion score
-- [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) : speaker verification
+- [MOSNet](https://github.com/aliutkus/speechmetrics#mosnet-absolutemosnet-or-mosnet) : 人間の主観評価を推測する
+- [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) : 話者がどれだけ似ているかを評価する
 
 <!-- - モデルの構造に FastSpeech2 の構造をつかってみる -->
 <!-- - (ログ出力に attention map も追加する) -->
 
 <!-- TODO: Write more details, results, observations, and conclusions. -->
 
-## Notes
-
-- リファレンス音声を参照する関係で、大量のディスクアクセスを行う
-  - ページキャッシュの開放: `sudo sh -c 'echo 1 >/proc/sys/vm/drop_caches'`
-
 ## 参考にしたものなど
 
-- [Faiss](https://github.com/facebookresearch/faiss) (efficient similarity search)
-- [CLUB](https://arxiv.org/abs/2006.12013) (information bottleneck)
-- [wav2vec 2.0](https://arxiv.org/abs/2006.11477) (phonetic feature extraction)
-- [CREPE](https://arxiv.org/abs/1802.06182) (pitch estimation)
-- [AdaSpeech](https://arxiv.org/abs/2103.00993) (conditional layer normalization)
-- [HiFi-GAN](https://arxiv.org/abs/2010.05646) (audio waveform generation)
-- [JVS corpus](https://arxiv.org/abs/1908.06248) (free multi-speaker voice corpus)
-- [FastSpeech 2](https://arxiv.org/abs/2006.04558), [FastPitch](https://arxiv.org/abs/2006.06873) (introduced me to the world of voice conversion)
-- [FragmentVC](https://arxiv.org/abs/2010.14150) (inspired me to use a similarity search)
+- [Faiss](https://github.com/facebookresearch/faiss) （高速なベクトル検索）
+- [CLUB](https://arxiv.org/abs/2006.12013) （情報の分離）
+- [wav2vec 2.0](https://arxiv.org/abs/2006.11477) （音素などの抽出）
+- [CREPE](https://arxiv.org/abs/1802.06182) （音の高さの推定）
+- [AdaSpeech](https://arxiv.org/abs/2103.00993) （ conditional layer normalization ）
+- [HiFi-GAN](https://arxiv.org/abs/2010.05646) （音声波形の生成）
+- [JVS corpus](https://arxiv.org/abs/1908.06248) （複数話者の発話音声のコーパス）
+- [FastSpeech 2](https://arxiv.org/abs/2006.04558), [FastPitch](https://arxiv.org/abs/2006.06873) （声質変換を始めたきっかけ）
+- [FragmentVC](https://arxiv.org/abs/2010.14150) （ベクトル検索を使うというアイデアをもらった）
 
 <!-- TODO: Comprehensive list of references. -->
 
-## License
+## ライセンスについて
 
-The code in this repository is licensed under the [Mozilla Public License 2.0](LICENSE).
+このレポジトリのコードは [Mozilla Public License 2.0](LICENSE) のもとで公開しています。
 
 Copyright 2023 Hoshi-VC Developer
