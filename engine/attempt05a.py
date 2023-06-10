@@ -26,6 +26,7 @@ import engine.hifi_gan.models as VOC
 from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDomainEntry4)
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
+from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
 from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, CLUBSampleForCategorical, GetNth
 from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
@@ -156,6 +157,7 @@ class VCModule(L.LightningModule):
                hdim: int,
                lr: float,
                lr_club: float,
+               lr_spd: float,
                warmup_steps: int,
                total_steps: int,
                milestones: tuple[int, int, int, int],
@@ -172,6 +174,16 @@ class VCModule(L.LightningModule):
 
     self.club_val = CLUBSampleForCategorical(xdim=self.vc_model.kv_dim, ynum=360, hdim=hdim, fast_sampling=True)
     self.club_key = CLUBSampleForCategorical(xdim=self.vc_model.kv_dim, ynum=360, hdim=hdim, fast_sampling=True)
+    self.club_ksp = CLUBSampleForCategorical(xdim=self.vc_model.kv_dim, ynum=len(P.dataset.speaker_ids), hdim=hdim)
+
+    self.speaker_d = ACDiscriminator(
+        BasicDiscriminator(
+            dims=[64, 128, 512, 128, 64],
+            kernels=[3, 5, 5, 5, 3],
+            strides=[1, 2, 2, 1, 1],
+        ),
+        len(P.dataset.speaker_ids),
+    )
 
     self.batch_rand = Random(94324203)
     self.clip_rand = Random(76482573)
@@ -180,6 +192,7 @@ class VCModule(L.LightningModule):
     self.milestones = milestones
     self.lr = lr
     self.lr_club = lr_club
+    self.lr_spd = lr_spd
     self.grad_clip = grad_clip
     self.e2e_milestones = e2e_milestones
     self.e2e_frames = e2e_frames
@@ -213,7 +226,7 @@ class VCModule(L.LightningModule):
                      train=False,
                      log: Optional[str] = None):
     h = self.hifi_gan
-    opt_model, opt_club, opt_d = self.optimizers()
+    opt_model, opt_club, opt_d, opt_spd = self.optimizers()
 
     # TODO: あとできれいに書き直したい...
 
@@ -237,19 +250,44 @@ class VCModule(L.LightningModule):
     if log:
       self.log(f"{log}_reconst", vc_reconst)
 
+    # speaker discriminator
+
+    spd_real, _ = self.speaker_d(mel.detach())
+    spd_fake, _ = self.speaker_d(mel_hat.detach())
+    spd_loss_real = aux_loss(spd_real, batch[0].speaker)
+    spd_loss_fake = aux_loss(spd_fake, batch[0].speaker)
+    spd_loss = spd_loss_real + spd_loss_fake
+
+    if train:
+      self.toggle_optimizer(opt_spd)
+      opt_spd.zero_grad()
+      self.manual_backward(spd_loss)
+      self.clip_gradients(opt_spd, gradient_clip_val=self.grad_clip)
+      opt_spd.step()
+      self.untoggle_optimizer(opt_spd)
+
+    if log:
+      self.log(f"{log}_spd_loss", spd_loss)
+      self.log(f"{log}_spd_loss_real", spd_loss_real)
+      self.log(f"{log}_spd_loss_fake", spd_loss_fake)
+
     # CLUB
 
     club_x_val = ref_value
     club_x_key = ref_key
     club_y = ref_pitch_i[:, :, 0]
+    club_sp_y = batch[0].speaker.repeat(1, ref_key.shape[1])
+    club_sp_n = batch[0].speaker[torch.randperm(batch[0].speaker.shape[0])].repeat(1, ref_key.shape[1])
 
     mi_val = self.club_val(club_x_val, club_y)
     mi_key = self.club_key(club_x_key, club_y)
+    mi_ksp = self.club_ksp(club_x_key, club_sp_y, club_sp_n)
 
     club_val = self.club_val.learning_loss(club_x_val.detach(), club_y.detach())
     club_key = self.club_key.learning_loss(club_x_key.detach(), club_y.detach())
+    club_ksp = self.club_ksp.learning_loss(club_x_key.detach(), club_sp_y.detach())
 
-    total_club = club_val + club_key
+    total_club = club_val + club_key + club_ksp
 
     if train:
       self.toggle_optimizer(opt_club)
@@ -262,8 +300,10 @@ class VCModule(L.LightningModule):
     if log:
       self.log(f"{log}_mi_val", mi_val)
       self.log(f"{log}_mi_key", mi_key)
+      self.log(f"{log}_mi_ksp", mi_ksp)
       self.log(f"{log}_loss_club_val", club_val)
       self.log(f"{log}_loss_club_key", club_key)
+      self.log(f"{log}_loss_club_ksp", club_ksp)
 
     # discriminator, e2e
 
@@ -338,9 +378,28 @@ class VCModule(L.LightningModule):
       y_g_hat = y_g_hat.squeeze(1)
       y_g_hat_mel = y_g_hat_mel.transpose(1, 2)
 
+    # generator (speaker discriminator loss)
+
+    with torch.no_grad():
+      _, spd_f_real = self.speaker_d(mel)
+    spd_c_fake, spd_f_fake = self.speaker_d(mel_hat)
+
+    spd_g_fm = torch.as_tensor(0., device=self.device)
+    for f1, f2 in zip(spd_f_real, spd_f_fake):
+      spd_g_fm += torch.mean(torch.abs(f1 - f2))
+
+    spd_g = aux_loss(spd_c_fake, batch[0].speaker)
+
+    if log:
+      self.log(f"{log}_spd_loss_fm", spd_g_fm)
+      self.log(f"{log}_spd_g_loss", spd_g)
+
+    total_model += spd_g_fm + spd_g
+
     # generator
 
     total_model += 0.01 * mi_val
+    # total_model += 0.01 + mi_ksp
 
     if train:
       self.toggle_optimizer(opt_model)
@@ -362,11 +421,12 @@ class VCModule(L.LightningModule):
     self_ratio = 1.0 - clamp(progress2, 0.0, 1.0) * 0.8
     self.log("self_ratio", self_ratio)
 
-    opt_model, opt_club, opt_d = self.optimizers()
-    sch_model, sch_club, sch_d = self.lr_schedulers()
+    opt_model, opt_club, opt_d, opt_spd = self.optimizers()
+    sch_model, sch_club, sch_d, sch_spd = self.lr_schedulers()
     self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
     self.log("lr_d", opt_d.optimizer.param_groups[0]["lr"])
+    self.log("lr_spd", opt_spd.optimizer.param_groups[0]["lr"])
 
     self._process_batch(batch, self_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
 
@@ -374,6 +434,7 @@ class VCModule(L.LightningModule):
       sch_club.step()
       sch_model.step()
       if step % 25000 == 0: sch_d.step()  # 25000: do_02500000 の steps/epoch
+      sch_spd.step()
 
   def validation_step(self, batch: IntraDomainEntry4, batch_idx: int):
     step = self.batches_that_stepped()
@@ -461,8 +522,9 @@ class VCModule(L.LightningModule):
     # TODO: 今はとりあえず vocoder の重みの更新はしないで様子を見る
 
     opt_model = AdamW(self.vc_model.parameters(), lr=self.lr)
-    opt_club = AdamW([*self.club_val.parameters(), *self.club_key.parameters()], lr=self.lr_club)
+    opt_club = AdamW([*self.club_val.parameters(), *self.club_key.parameters(), *self.club_ksp.parameters()], lr=self.lr_club)
     opt_d = AdamW([*self.vocoder_msd.parameters(), *self.vocoder_mpd.parameters()], h.learning_rate, betas=[h.adam_b1, h.adam_b2])
+    opt_spd = AdamW(self.speaker_d.parameters(), lr=self.lr_spd)
 
     # TODO: こんな方法とタイミングで事前学習済みモデルを読み込むのが最善とは思えない
     last_epoch = -1
@@ -500,8 +562,9 @@ class VCModule(L.LightningModule):
     ])
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
+    sch_spd = S.MultiplicativeLR(opt_spd, lambda step: 1.0)
 
-    return [opt_model, opt_club, opt_d], [sch_model, sch_club, sch_d]
+    return [opt_model, opt_club, opt_d, opt_spd], [sch_model, sch_club, sch_d, sch_spd]
 
 if __name__ == "__main__":
 
@@ -523,6 +586,7 @@ if __name__ == "__main__":
       hdim=512,
       lr=1e-4,
       lr_club=1e-4,
+      lr_spd=1e-4,
       warmup_steps=500,
       total_steps=total_steps,
       milestones=(0, 1, 10000, 20000),

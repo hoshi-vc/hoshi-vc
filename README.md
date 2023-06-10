@@ -6,7 +6,7 @@ Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hosh
 <br>
 <div align="center">
   <h1>Hoshi-VC</h1>
-  <p>A Personal Experiment in Real-Time Voice Conversion</p>
+  <p>A Personal Experiment in Real-Time Any-to-Many Voice Conversion</p>
 </div>
 <br>
 <br>
@@ -37,6 +37,12 @@ python engine/prepare.py
 Note: The `requirements.txt` is kept up to date, so you can use that.
 
 ## Progress
+
+This project is currently under active development.
+
+Please note that the source code is updated constantly.
+
+Feel free to star this repo if you are interested in updates.
 
 - [x] Prepare the preprocessing pipeline
 - [x] Create a base conversion model

@@ -5,7 +5,7 @@ English version: [README.md](README.md)
 <br>
 <div align="center">
   <h1>Hoshi-VC</h1>
-  <p>A Personal Experiment in Real-Time Voice Conversion</p>
+  <p>A Personal Experiment in Real-Time Any-to-Many Voice Conversion</p>
   <p>学習が高速なリアルタイム声質変換を作ってみる個人的な実験</p>
 </div>
 <br>
@@ -41,6 +41,10 @@ Note: `requirements.txt` は最新に保たれているので、それを使っ�
 <!-- TODO: 環境構築の方法だけじゃなくて、学習の走らせ方などまで書きたい。 -->
 
 ## 開発の進捗
+
+このプロジェクトは現在、活発に開発が行われています。
+
+ソースコードが毎日のように更新されることにご注意ください。
 
 - [x] 前処理のパイプラインを用意する
 - [x] 基本的な変換モデルを作る
