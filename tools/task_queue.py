@@ -39,7 +39,7 @@ def execute_file(file: Path):
 def watch_tasks():
   printed = False
   while True:
-    files = list(TASKS.glob("*.py"))
+    files = sorted(list(TASKS.glob("*.py")))
 
     if not files:
       if not printed: print("=== Waiting for new tasks...")
