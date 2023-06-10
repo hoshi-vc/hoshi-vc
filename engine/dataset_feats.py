@@ -225,6 +225,8 @@ class FeatureEntry4(NamedTuple):
   speaker: Tensor
   energy: Tensor
   mel: Tensor
+  phoneme_i: Tensor
+  phoneme_v: Tensor
   pitch_i: Tensor
   pitch_v: Tensor
   w2v2: Tensor
@@ -240,6 +242,8 @@ class IntraDomainDataset4(IntraDomainDataset):
         speaker=np.array([speaker_id]),
         energy=np.array(np.load(d / "energy.npy", mmap_mode="r")[start:end]),
         mel=np.array(np.load(d / "melspec.npy", mmap_mode="r")[start:end]),
+        phoneme_i=np.array(np.load(d / f"phoneme_i_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
+        phoneme_v=np.array(np.load(d / f"phoneme_v_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end]),
         pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
         pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
         w2v2=np.array(np.load(d / "wav2vec2.npy", mmap_mode="r")[start:end]),

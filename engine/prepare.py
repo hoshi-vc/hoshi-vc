@@ -153,7 +153,7 @@ class Preparation:
         np_safesave(PITCH_V, np.concatenate(pitch_v_list))
 
   def prepare_faiss(self):
-    for speaker_id in tqdm(self.dataset.speaker_ids, ncols=0, desc="Building index"):
+    for speaker_id in tqdm(self.dataset.speaker_ids, ncols=0, desc="Building index", leave=False):
       DEST = str(FAISS_DIR / f"{speaker_id}.index")
       if Path(DEST).exists(): continue
 

@@ -5,6 +5,7 @@
 
 # %%
 import os
+import sys
 import zipfile
 from contextlib import contextmanager
 from os import path
@@ -68,8 +69,10 @@ def change_loglevel(logger: str, level: int):
   import logging
   prev_level = logging.getLogger(logger).level
   logging.getLogger(logger).setLevel(level)
-  yield
-  logging.getLogger(logger).setLevel(prev_level)
+  try:
+    yield
+  finally:
+    logging.getLogger(logger).setLevel(prev_level)
 
 def np_safesave(file: str | Path, arr: NPArray, order_c: bool = True):
   # First, save to a temporary file
@@ -109,3 +112,13 @@ class AttrDict(dict):
   def __init__(self, *args, **kwargs):
     super(AttrDict, self).__init__(*args, **kwargs)
     self.__dict__ = self
+
+@contextmanager
+def hide_prints():
+  original = sys.stdout
+  sys.stdout = open(os.devnull, 'w')
+  try:
+    yield
+  finally:
+    sys.stdout.close()
+    sys.stdout = original

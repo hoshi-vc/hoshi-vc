@@ -17,11 +17,11 @@ from matplotlib import pyplot as plt
 from torch import Tensor
 
 from engine.lib.utils import DATA_DIR
-from engine.lib.utils_ui import plot_spectrograms, plot_spectrograms2
+from engine.lib.utils_ui import (plot_attention, plot_spectrograms, plot_spectrograms2)
 from engine.prepare import Preparation
 
-def setup_train_environment():
-  seed_everything(90212374, workers=True)
+def setup_train_environment(seed=90212374):
+  seed_everything(seed, workers=True)
   matplotlib.use("Agg")
   torch.set_float32_matmul_precision("medium")  # TODO: 精度落として問題ない？
 
@@ -53,6 +53,12 @@ def log_spectrograms(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_che
       self.log_wandb({f"{folder}/{name}": wandb.Image(plot_spectrograms2(y[i], y_hat[i], y_hat_cheat[i]))})
     else:
       self.log_wandb({f"{folder}/{name}": wandb.Image(plot_spectrograms(y[i], y_hat[i]))})
+  plt.close("all")
+
+@torch._dynamo.disable()
+def log_attentions(self, names: list[str], attn: Tensor, folder="Attention"):
+  for i, name in enumerate(names):
+    self.log_wandb({f"{folder}/{name}": wandb.Image(plot_attention(attn[i]))})
   plt.close("all")
 
 @torch._dynamo.disable()

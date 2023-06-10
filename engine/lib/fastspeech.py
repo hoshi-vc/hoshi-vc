@@ -75,6 +75,20 @@ class FFTBlock(torch.nn.Module):
 
     return out
 
+class FFNBlock(torch.nn.Module):
+  def __init__(self, iodim: int, hdim: int, kernels: tuple[int, int], dropout: float):
+    super().__init__()
+    self.conv = PositionwiseFeedForward(iodim, hdim, kernels, dropout=dropout)
+    self.norm = nn.LayerNorm(iodim)
+
+  def forward(self, x: Tensor):
+    residual = x
+    x = self.conv(x)
+    x = x + residual
+    x = self.norm(x)
+
+    return x
+
 class PositionwiseFeedForward(nn.Module):
   """ 2-layer 1D convolutional network with ReLU activation (Section 3.1) """
   def __init__(self, iodim: int, hdim: int, kernels: tuple[int, int], dropout: float):

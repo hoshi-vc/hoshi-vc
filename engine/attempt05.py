@@ -8,7 +8,7 @@
 from math import ceil
 from pathlib import Path
 from random import Random
-from typing import Any, NamedTuple, Optional
+from typing import Any, Optional
 
 import lightning.pytorch as L
 import torch
@@ -20,27 +20,17 @@ import wandb
 from lightning.pytorch import profilers
 from torch import Tensor, nn
 from torch.optim import AdamW
-from torchaudio.functional import resample
 from wandb.wandb_run import Run
 
 import engine.hifi_gan.models as VOC
-from engine.dataset_feats import IntraDomainDataModule4, IntraDomainEntry4
+from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDomainEntry4)
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
-from engine.lib.fastspeech import PosFFT
-from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
+from engine.lib.fastspeech import FFNBlock, PosFFT
+from engine.lib.layers import Buckets, CLUBSampleForCategorical, GetNth
 from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
-from engine.utils import (log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
-
-class VCInputs(NamedTuple):
-  src_energy: Tensor  #    (batch, src_len, 1)
-  src_w2v2: Tensor  #      (batch, src_len, 768)
-  src_pitch_i: Tensor  #   (batch, src_len, 1+)
-  ref_energy: Tensor  #    (batch, ref_len, 1)
-  ref_w2v2: Tensor  #      (batch, ref_len, 768)
-  ref_pitch_i: Tensor  #   (batch, ref_len, 1+)
-  ref_mel: Tensor  #       (batch, ref_len, 80)
+from engine.utils import (log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -50,40 +40,38 @@ class VCModel(nn.Module):
 
     energy_dim = hdim // 4
     pitch_dim = hdim // 4
-    w2v2_dim = hdim
+    phoneme_dim = hdim // 2
     mel_dim = hdim // 2
+    kv_dim = hdim // 2
+
+    self.kv_dim = kv_dim
 
     self.energy_bins = Buckets(-11.0, -3.0, 128)
     self.energy_embed = nn.Embedding(128, energy_dim)
     self.pitch_embed = nn.Embedding(360, pitch_dim)
-    self.w2v2_embed = nn.Linear(768, w2v2_dim)
+    self.phoneme_embed = nn.Embedding(400, phoneme_dim)
     self.encode_key = nn.Sequential(
-        nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
+        nn.Linear(energy_dim + pitch_dim + phoneme_dim, hdim),
+        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+        nn.RNN(hdim, hdim, batch_first=True),
+        GetNth(0),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
+        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+        nn.Linear(hdim, kv_dim),
     )
 
     self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         nn.Linear(energy_dim + mel_dim, hdim),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
+        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+        nn.Linear(hdim, kv_dim),
     )
 
-    self.lookup = nn.MultiheadAttention(hdim, 4, dropout=0.2, batch_first=True)
+    self.lookup = nn.MultiheadAttention(kv_dim, 4, dropout=0.2, batch_first=True)
 
     self.decode = nn.Sequential(
-        nn.Linear(hdim + energy_dim + pitch_dim, hdim),
+        nn.Linear(kv_dim + energy_dim + pitch_dim, hdim),
         PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
         nn.Linear(hdim, 80),
     )
@@ -94,20 +82,24 @@ class VCModel(nn.Module):
   def forward_pitch(self, pitch_i: Tensor):
     return self.pitch_embed(pitch_i[:, :, 0])
 
-  def forward_w2v2(self, w2v2: Tensor):
-    return self.w2v2_embed(w2v2)
+  def forward_phoneme(self, phoneme_i: Tensor, phoneme_v: Tensor):
+    phoneme: Optional[Tensor] = None
+    for k in range(phoneme_v.shape[-1]):
+      emb_k = self.phoneme_embed(phoneme_i[:, :, k])
+      emb_k *= phoneme_v[:, :, k].exp().unsqueeze(-1)
+      phoneme = emb_k if phoneme is None else phoneme + emb_k
+    return phoneme
 
   def forward_mel(self, mel: Tensor):
     return self.mel_encode(mel)
 
-  def forward_key(self, energy: Tensor, pitch: Tensor, w2v2: Tensor):
-    return self.encode_key(torch.cat([energy, pitch, w2v2], dim=-1))
+  def forward_key(self, energy: Tensor, pitch: Tensor, phoneme: Tensor):
+    return self.encode_key(torch.cat([energy, pitch, phoneme], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
     return self.encode_value(torch.cat([energy, mel], dim=-1))
 
-  def forward(self, o: VCInputs):
-
+  def forward(self, batch: IntraDomainEntry4, src_ref_start: int, src_ref_len: int):
     # key: 似たような発音ほど近い表現になってほしい
     #      話者性が多少残ってても lookup 後の value への影響は間接的なので多分問題ない
 
@@ -115,26 +107,49 @@ class VCModel(nn.Module):
     #        ただし、ピッチや音量によらない表現になってほしい
     #        （デコード時にピッチと音量を調節するので、そこと情報の衝突が起きないでほしい）
 
-    # shape: (batch, src_len, hdim)
-    src_energy = self.forward_energy(o.src_energy)
-    src_pitch = self.forward_pitch(o.src_pitch_i)
-    src_w2v2 = self.forward_w2v2(o.src_w2v2)
-    src_key = self.forward_key(src_energy, src_pitch, src_w2v2)
+    n_refs = len(batch)
+    n_batch = len(batch[0].energy)
+    seq_len = batch[0].energy.shape[1]
 
-    ref_energy = self.forward_energy(o.ref_energy)
-    ref_pitch = self.forward_pitch(o.ref_pitch_i)
-    ref_w2v2 = self.forward_w2v2(o.ref_w2v2)
-    ref_key = self.forward_key(ref_energy, ref_pitch, ref_w2v2)
+    assert seq_len >= src_ref_start + src_ref_len, f"seq_len={seq_len}, src_ref_start={src_ref_start}, src_ref_len={src_ref_len}"
+    src_ref_end = src_ref_start + src_ref_len
 
-    ref_mel = self.forward_mel(o.ref_mel)
-    ref_value = self.forward_value(ref_energy, ref_pitch, ref_mel)
+    batch_energy = torch.stack([o.energy for o in batch]).flatten(0, 1)
+    batch_pitch_i = torch.stack([o.pitch_i for o in batch]).flatten(0, 1)
+    batch_phoneme_i = torch.stack([o.phoneme_i for o in batch]).flatten(0, 1)
+    batch_phoneme_v = torch.stack([o.phoneme_v for o in batch]).flatten(0, 1)
+    batch_mel = torch.stack([o.mel for o in batch]).flatten(0, 1)
 
-    tgt_value, _ = self.lookup(src_key, ref_key, ref_value)
+    batch_energy = self.forward_energy(batch_energy)
+    batch_pitch = self.forward_pitch(batch_pitch_i)
+    batch_phoneme = self.forward_phoneme(batch_phoneme_i, batch_phoneme_v)
+    batch_mel = self.forward_mel(batch_mel)
+    batch_key = self.forward_key(batch_energy, batch_pitch, batch_phoneme)
+    batch_value = self.forward_value(batch_energy, batch_pitch, batch_mel)
+
+    # (n_refs, n_batch, seq_len, feat_dim)
+    batch_energy = batch_energy.unflatten(0, (n_refs, n_batch))
+    batch_pitch = batch_pitch.unflatten(0, (n_refs, n_batch))
+    batch_key = batch_key.unflatten(0, (n_refs, n_batch))
+    batch_value = batch_value.unflatten(0, (n_refs, n_batch))
+    batch_pitch_i = batch_pitch_i.unflatten(0, (n_refs, n_batch))
+
+    # (batch, len, feat_dim)
+    src_key = batch_key[0]
+    src_energy = batch_energy[0]
+    src_pitch = batch_pitch[0]
+    ref_key = torch.cat([batch_key[0, :, src_ref_start:src_ref_end], batch_key[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+    ref_value = torch.cat([batch_value[0, :, src_ref_start:src_ref_end], batch_value[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+    ref_pitch_i = torch.cat([batch_pitch_i[0, :, src_ref_start:src_ref_end], batch_pitch_i[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+
+    assert ref_key.shape[1] == seq_len * (n_refs - 1), f"ref_key.shape={ref_key.shape}, seq_len={seq_len}, n_refs={n_refs}"
+
+    tgt_value, attn = self.lookup(src_key, ref_key, ref_value, need_weights=True)
 
     # shape: (batch, src_len, 80)
     tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
 
-    return tgt_mel, (ref_key, ref_value)
+    return tgt_mel, (ref_key, ref_value, ref_pitch_i, attn)
 
 class VCModule(L.LightningModule):
   def __init__(self,
@@ -155,8 +170,8 @@ class VCModule(L.LightningModule):
     self.vocoder_mpd = VOC.MultiPeriodDiscriminator()
     self.vocoder_msd = VOC.MultiScaleDiscriminator()
 
-    self.club_val = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
-    self.club_key = CLUBSampleForCategorical(xdim=hdim, ynum=360, hdim=hdim, fast_sampling=True)
+    self.club_val = CLUBSampleForCategorical(xdim=self.vc_model.kv_dim, ynum=360, hdim=hdim, fast_sampling=True)
+    self.club_key = CLUBSampleForCategorical(xdim=self.vc_model.kv_dim, ynum=360, hdim=hdim, fast_sampling=True)
 
     self.batch_rand = Random(94324203)
     self.clip_rand = Random(76482573)
@@ -189,37 +204,9 @@ class VCModule(L.LightningModule):
     wandb_logger: Run = self.logger.experiment
     wandb_logger.log(item, step=self.batches_that_stepped())
 
-  def _make_vc_inputs(self, batch: IntraDomainEntry4, self_ratio: float, ref_ratio: float):
-    src, refs = batch[0], batch[1:]
-
-    base_len = src.mel.shape[1]
-    n_refs = len(refs)
-    s_len = int(base_len * self_ratio)
-    r_len = int(base_len * n_refs * ref_ratio)
-    rs = self.batch_rand.randint(0, base_len * n_refs - r_len)
-    re = rs + r_len
-
-    # yapf: disable
-    ref_energy= torch.cat([ src.energy[:, :s_len, :], torch.cat([ o.energy for o in refs], dim=1)[:, rs:re, :]], dim=1)
-    ref_w2v2=   torch.cat([   src.w2v2[:, :s_len, :], torch.cat([   o.w2v2 for o in refs], dim=1)[:, rs:re, :]], dim=1)
-    ref_pitch_i=torch.cat([src.pitch_i[:, :s_len, :], torch.cat([o.pitch_i for o in refs], dim=1)[:, rs:re, :]], dim=1)
-    ref_mel=    torch.cat([    src.mel[:, :s_len, :], torch.cat([    o.mel for o in refs], dim=1)[:, rs:re, :]], dim=1)
-    # yapf: enable
-
-    return VCInputs(
-        src_energy=src.energy,
-        src_w2v2=src.w2v2,
-        src_pitch_i=src.pitch_i,
-        ref_energy=ref_energy,
-        ref_w2v2=ref_w2v2,
-        ref_pitch_i=ref_pitch_i,
-        ref_mel=ref_mel,
-    )
-
   def _process_batch(self,
                      batch: IntraDomainEntry4,
                      self_ratio: float,
-                     ref_ratio: float,
                      step: int,
                      e2e: bool,
                      e2e_frames: Optional[int],
@@ -237,12 +224,13 @@ class VCModule(L.LightningModule):
     # inputs
     mel = batch[0].mel
     y = batch[0].audio
-    vc_inputs = self._make_vc_inputs(batch, self_ratio, ref_ratio)
 
     # vc model
 
-    mel_hat: Tensor
-    mel_hat, (ref_key, ref_value) = self.vc_model(vc_inputs)
+    seq_len = mel.shape[1]
+    src_ref_len = int(self_ratio * seq_len)
+    src_ref_start = self.batch_rand.randint(0, seq_len - src_ref_len)
+    mel_hat, (ref_key, ref_value, ref_pitch_i, vc_attn) = self.vc_model(batch, src_ref_start, src_ref_len)
 
     vc_reconst = F.l1_loss(mel_hat, mel)
 
@@ -253,13 +241,13 @@ class VCModule(L.LightningModule):
 
     club_x_val = ref_value
     club_x_key = ref_key
-    club_y = vc_inputs.ref_pitch_i[:, :, 0]
+    club_y = ref_pitch_i[:, :, 0]
 
     mi_val = self.club_val(club_x_val, club_y)
     mi_key = self.club_key(club_x_key, club_y)
 
-    club_val = self.club_val.learning_loss(club_x_val, club_y)
-    club_key = self.club_key.learning_loss(club_x_key, club_y)
+    club_val = self.club_val.learning_loss(club_x_val.detach(), club_y.detach())
+    club_key = self.club_key.learning_loss(club_x_key.detach(), club_y.detach())
 
     total_club = club_val + club_key
 
@@ -279,7 +267,7 @@ class VCModule(L.LightningModule):
 
     # discriminator, e2e
 
-    total_model = vc_reconst / 0.4
+    total_model = vc_reconst * 60
     y_g_hat = None
     y_g_hat_mel = None
     if debug or e2e:
@@ -331,16 +319,14 @@ class VCModule(L.LightningModule):
       y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = self.vocoder_msd(e2e_y, y_g_hat)
       loss_fm_f = VOC.feature_loss(fmap_f_r, fmap_f_g)
       loss_fm_s = VOC.feature_loss(fmap_s_r, fmap_s_g)
-      loss_gen_f, losses_gen_f = VOC.generator_loss(y_df_hat_g)
-      loss_gen_s, losses_gen_s = VOC.generator_loss(y_ds_hat_g)
+      loss_gen_f, _ = VOC.generator_loss(y_df_hat_g)
+      loss_gen_s, _ = VOC.generator_loss(y_ds_hat_g)
 
-      e2e_model_loss = (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel * 45.0) / 60.0
+      e2e_model_loss = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel * 45.0
 
-      if debug: total_model = total_model * 0.2 + e2e_model_loss * 0.8
-      else:
-        if step < self.e2e_milestones[1]: pass
-        elif step < self.e2e_milestones[2]: total_model = total_model * 0.2 + e2e_model_loss * 0.8
-        else: total_model = e2e_model_loss
+      e2e_ratio = clamp((step - self.e2e_milestones[1]) / (self.e2e_milestones[2] - self.e2e_milestones[1]), 0.0, 1.0)
+      if debug: e2e_ratio = 0.1
+      total_model = total_model * (1.0 - e2e_ratio) + e2e_model_loss * e2e_ratio
 
       if log:
         self.log(f"{log}_e2e_gen_f", loss_gen_f)
@@ -367,17 +353,14 @@ class VCModule(L.LightningModule):
     if log:
       self.log(f"{log}_loss", total_model)
 
-    return mel_hat, y_g_hat, y_g_hat_mel
+    return mel_hat, y_g_hat, y_g_hat_mel, vc_attn
 
   def training_step(self, batch: IntraDomainEntry4, batch_idx: int):
     step = self.batches_that_stepped()
     milestones = self.milestones
-    progress1 = (step - milestones[0]) / (milestones[1] - milestones[0])
     progress2 = (step - milestones[2]) / (milestones[3] - milestones[2])
-    ref_ratio = clamp(progress1, 0.0, 1.0)
-    self_ratio = 1 - clamp(progress2, 0.0, 1.0)
+    self_ratio = 1.0 - clamp(progress2, 0.0, 1.0) * 0.8
     self.log("self_ratio", self_ratio)
-    self.log("ref_ratio", ref_ratio)
 
     opt_model, opt_club, opt_d = self.optimizers()
     sch_model, sch_club, sch_d = self.lr_schedulers()
@@ -385,7 +368,7 @@ class VCModule(L.LightningModule):
     self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
     self.log("lr_d", opt_d.optimizer.param_groups[0]["lr"])
 
-    self._process_batch(batch, self_ratio, ref_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
+    self._process_batch(batch, self_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
 
     with hide_warns():
       sch_club.step()
@@ -400,8 +383,8 @@ class VCModule(L.LightningModule):
     # vcheat: validation with cheating
     complex_metrics = batch_idx < complex_metrics_batches
     e2e = batch_idx == 0 or complex_metrics or step >= self.e2e_milestones[0]
-    _, y_c, _ = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
-    _, y_v, _ = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
+    _, y_c, _, _ = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
+    _, y_v, _, _ = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
 
     # MOSNet を入れるとモデルの学習が非常に遅くなる
     # 多分メモリ不足によるものだけど、そこまでするほど MOSNet が正確なのか知らない
@@ -409,40 +392,68 @@ class VCModule(L.LightningModule):
     # see: https://www.isca-speech.org/archive_v0/VCC_BC_2020/pdfs/VCC2020_paper_34.pdf
 
     if complex_metrics:
-      y_16k = resample(y, 22050, 16000)
-      y_v_16k = resample(y_v, 22050, 16000)
-      y_c_16k = resample(y_c, 22050, 16000)
-      y_spkemb = P.spkemb(y_16k, 16000)
-      y_v_spkemb = P.spkemb(y_v_16k, 16000)
-      y_c_spkemb = P.spkemb(y_c_16k, 16000)
-      v_spksim = F.cosine_similarity(y_spkemb, y_v_spkemb).mean()
-      c_spksim = F.cosine_similarity(y_spkemb, y_c_spkemb).mean()
-      self.log("valid_spksim", v_spksim)
-      self.log("vcheat_spksim", c_spksim)
-      self.val_outputs.append({"valid_spksim": v_spksim, "vcheat_spksim": c_spksim})
+      y_spkemb = P.spkemb(y, 22050)
+      y_v_spkemb = P.spkemb(y_v, 22050)
+      y_c_spkemb = P.spkemb(y_c, 22050)
+      v_spksim = F.cosine_similarity(y_spkemb, y_v_spkemb)
+      c_spksim = F.cosine_similarity(y_spkemb, y_c_spkemb)
+      self.log("valid_spksim", v_spksim.mean())
+      self.log("vcheat_spksim", c_spksim.mean())
+
+      # inter-speaker
+      rotate = lambda x: torch.cat([x[1:], x[:1]], dim=0)
+      inter_batch = [o for o in batch]
+      inter_batch[0] = FeatureEntry4(*[rotate(o) for o in inter_batch[0]])
+
+      _, yc2, _, _ = self._process_batch(inter_batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
+      _, yv2, _, _ = self._process_batch(inter_batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
+
+      yv2_spkemb = P.spkemb(yv2, 22050)
+      yc2_spkemb = P.spkemb(yc2, 22050)
+      v2_spksim = F.cosine_similarity(y_spkemb, yv2_spkemb)
+      c2_spksim = F.cosine_similarity(y_spkemb, yc2_spkemb)
+      v2_spksim_leak = F.cosine_similarity(rotate(y_spkemb), yv2_spkemb)
+      c2_spksim_leak = F.cosine_similarity(rotate(y_spkemb), yc2_spkemb)
+      v2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yv2_spkemb))
+      c2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yc2_spkemb))
+      self.log("valid_spksim_vc", v2_spksim.mean())
+      self.log("vcheat_spksim_vc", c2_spksim.mean())
+      self.log("valid_spksim_leak", v2_spksim_leak.mean())
+      self.log("vcheat_spksim_leak", c2_spksim_leak.mean())
+      self.log("valid_spksim_base", v2_spksim_irrelevent.mean())
+      self.log("vcheat_spksim_base", c2_spksim_irrelevent.mean())
+
+      self.val_outputs.append({"valid_spksim": v_spksim, "vcheat_spksim": c_spksim, "valid_spksim_vc": v2_spksim, "vcheat_spksim_vc": c2_spksim})
 
     if batch_idx == 0:
-      mel_c, y_c, ymel_c = self._process_batch(batch, self_ratio=1.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
-      mel_v, y_v, ymel_v = self._process_batch(batch, self_ratio=0.0, ref_ratio=1.0, step=step, e2e=True, e2e_frames=None)
-      names = [f"{i:02d}" for i in range(8)]
+      mel_c, y_c, ymel_c, attn_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=True, e2e_frames=None)
+      mel_v, y_v, ymel_v, attn_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=True, e2e_frames=None)
+      names = [f"{i:02d}" for i in range(len(mel))]
+      log_attentions(self, names, attn_c, "Attention (Cheat)")
+      log_attentions(self, names, attn_v, "Attention")
       log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
       log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
       log_audios2(self, P, names, 22050, y, y_v, y_c)
 
   def on_validation_epoch_end(self):
     if len(self.val_outputs) > 0:
-      v_spksim = torch.stack([x["valid_spksim"] for x in self.val_outputs]).cpu().numpy()
-      c_spksim = torch.stack([x["vcheat_spksim"] for x in self.val_outputs]).cpu().numpy()
+      v_spksim = torch.cat([x["valid_spksim"] for x in self.val_outputs]).cpu().numpy()
+      c_spksim = torch.cat([x["vcheat_spksim"] for x in self.val_outputs]).cpu().numpy()
+      v2_spksim = torch.cat([x["valid_spksim_vc"] for x in self.val_outputs]).cpu().numpy()
+      c2_spksim = torch.cat([x["vcheat_spksim_vc"] for x in self.val_outputs]).cpu().numpy()
       self.log_wandb({"Spksim/valid_hist": wandb.Histogram(v_spksim)})
       self.log_wandb({"Spksim/vcheat_hist": wandb.Histogram(c_spksim)})
+      self.log_wandb({"Spksim/valid_hist_vc": wandb.Histogram(v2_spksim)})
+      self.log_wandb({"Spksim/vcheat_hist_vc": wandb.Histogram(c2_spksim)})
 
     self.val_outputs.clear()
 
   def on_validation_end(self):
-    pass  # メモリが足りなかったら使うかも
-    # P.release_spkemb()
-    # P.release_mosnet()
-    # torch.cuda.empty_cache()
+    # チェックポイントから学習を再開したときに、学習速度が 1/4 くらいになった。
+    # メモリ使用率が高かったので試しにここでメモリを開放してみたところ、速さが（ほぼ）もとに戻った。
+    P.release_spkemb()
+    P.release_mosnet()
+    torch.cuda.empty_cache()
 
   def configure_optimizers(self):
     h = self.hifi_gan
@@ -456,14 +467,18 @@ class VCModule(L.LightningModule):
     # TODO: こんな方法とタイミングで事前学習済みモデルを読み込むのが最善とは思えない
     last_epoch = -1
     if self.hifi_gan_ckpt is not None:
-      g, do = self.hifi_gan_ckpt
-      g_data = torch.load(g, map_location=self.device)
-      do_data = torch.load(do, map_location=self.device)
-      last_epoch = do_data['epoch']
-      self.vocoder.load_state_dict(g_data["generator"])
-      self.vocoder_mpd.load_state_dict(do_data['mpd'])
-      self.vocoder_msd.load_state_dict(do_data['msd'])
-      opt_d.load_state_dict(do_data['optim_d'])
+      if self.trainer.ckpt_path is not None:
+        print("Skipped loading pretrained HiFi-GAN weights because the training was resumed from a checkpoint.")
+      else:
+        print("Loading pretrained HiFi-GAN weights...")
+        g, do = self.hifi_gan_ckpt
+        g_data = torch.load(g, map_location=self.device)
+        do_data = torch.load(do, map_location=self.device)
+        last_epoch = do_data['epoch']
+        self.vocoder.load_state_dict(g_data["generator"])
+        self.vocoder_mpd.load_state_dict(do_data['mpd'])
+        self.vocoder_msd.load_state_dict(do_data['msd'])
+        opt_d.load_state_dict(do_data['optim_d'])
 
       # 1 epoch = 500 steps として、速度が安定してきた epoch 3 後半あたりの処理速度を雑に測った
       # with compile:    3.52 it/s
@@ -480,7 +495,8 @@ class VCModule(L.LightningModule):
 
     sch_model = S.ChainedScheduler([
         get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
-        S.MultiplicativeLR(opt_model, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0)
+        S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[0]) / 1000) if step >= self.e2e_milestones[0] else 1.0),
+        S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[2]) / 1000) if step >= self.e2e_milestones[2] else 1.0),
     ])
     sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
@@ -495,9 +511,9 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=15, batch_size=8, n_batches=1000, n_batches_val=200)
+  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=7, batch_size=4, n_batches=1000, n_batches_val=200)
 
-  total_steps = 30000
+  total_steps = 100000
   complex_metrics_batches = 50  # see: validation_step
 
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
@@ -505,12 +521,12 @@ if __name__ == "__main__":
 
   model = VCModule(
       hdim=512,
-      lr=1e-3,
+      lr=1e-4,
       lr_club=1e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 4000, 8000),
-      e2e_milestones=(10000, 12000, 14000),
+      milestones=(0, 1, 10000, 20000),
+      e2e_milestones=(22000, 30000, 40000),
       e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
       grad_clip=1.0,
       hifi_gan=AttrDict({
@@ -566,14 +582,18 @@ if __name__ == "__main__":
       # detect_anomaly=True,
       # profiler=profilers.PyTorchProfiler(
       #     DATA_DIR / "profiler",
-      #     schedule=torch.profiler.schedule(wait=20, warmup=10, active=6, repeat=1),
+      #     schedule=torch.profiler.schedule(wait=0, warmup=30, active=6, repeat=1),
       #     on_trace_ready=torch.profiler.tensorboard_trace_handler(DATA_DIR / "profiler"),
-      #     with_stack=True,
+      #     with_stack=False,
       # ),
   )
 
   # train the model
-  trainer.fit(model, datamodule=datamodule)
+  trainer.fit(
+      model,
+      datamodule=datamodule,
+      ckpt_path=None,
+  )
 
   # print(prof.report())
   # print(torch._dynamo.utils.compile_times())

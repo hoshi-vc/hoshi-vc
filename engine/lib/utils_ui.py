@@ -52,6 +52,18 @@ def play_audio(audio: Tensor | NPArray, sr: int, normalize=False):
   else:
     raise ValueError("Waveform with more than 2 channels are not supported.")
 
+def plot_attention(attn: Tensor):
+  attn = attn.cpu()
+
+  fig, axs = plt.subplots(1, 1)
+  fig.set_size_inches(20, 6)
+
+  axs.imshow(attn, origin="lower", aspect="auto", interpolation="none")
+  axs.get_xaxis().set_visible(False)
+  axs.get_yaxis().set_visible(False)
+
+  return fig
+
 def plot_spectrograms(y: Tensor, y_hat: Tensor):
   y = y.cpu()
   y_hat = y_hat.cpu()
