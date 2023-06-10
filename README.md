@@ -36,6 +36,26 @@ python engine/prepare.py
 
 Note: The `requirements.txt` is kept up to date, so you can use that.
 
+## Progress
+
+- [x] Prepare the preprocessing pipeline
+- [x] Create a base conversion model
+- [x] Experiment with different architectures
+  - [x] Search for related speech fragments with cross-attention
+  - [x] Make the latent space pitch independent with CLUB
+  - [x] Train model and vocoder together
+  - [x] Use FastSpeech's Feed Forward Transformer
+  - [x] Use ACGAN to increase speaker similarity
+  - [ ] Make latent space speaker independent if necessary
+  - [ ] Use AdaSpeech's conditional layer normalization
+  - [ ] And other improvements...
+- [x] Create a temporary inference UI for development
+  - [x] Write an inference script using Faiss
+  - [x] Build a temporary UI with Gradio
+  - [x] Make it faster than real time
+- [ ] Create a real-time conversion client
+- [ ] Make it easy for everyone to use
+
 ## What I Tried
 
 ### Attempt 01: Simple voice cut and paste
