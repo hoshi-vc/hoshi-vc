@@ -65,20 +65,24 @@ class IntraDomainDataset(Dataset):
     self.random_offset = random_offset
 
     self.starts: list[tuple[str, int, int]] = []
-    self.same_domain_lut: dict[str, list[int]] = {}
     for d, speaker_id in zip(dirs, speaker_ids):
       length = np.load(d / "melspec.npy", mmap_mode="r").shape[0]
       for start in range(0, length - frames - start_hop, start_hop):
         self.starts.append((d, speaker_id, start))
-        self.same_domain_lut.setdefault(d, []).append(len(self.starts) - 1)
 
     if shuffle is not None:
       rand = Random(shuffle)
       rand.shuffle(self.starts)
 
-    for k, v in self.same_domain_lut.items():
+    # シャッフルの前に same_speaker_lut を作成するというバグがあった。
+    # なので、この修正を施す前のすべての実験結果は無効になります！やり直しだぁ！
+    self.same_speaker_lut: dict[str, list[int]] = {}
+    for i, (d, speaker_id, start) in enumerate(self.starts):
+      self.same_speaker_lut.setdefault(speaker_id, []).append(i)
+
+    for k, v in self.same_speaker_lut.items():
       if len(v) < n_samples + 1:
-        raise ValueError(f"Domain {k} has only {len(v)} samples, which is less than {n_samples} + 1.")
+        raise ValueError(f"Speaker {k} has only {len(v)} samples, which is less than {n_samples} + 1.")
 
   def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> FeatureEntry:
     return load_feature_entry(d, start, frames)
@@ -91,7 +95,7 @@ class IntraDomainDataset(Dataset):
     offset = 0
     if self.random_offset: self.random.randint(0, self.start_hop)
 
-    other_indices = self.same_domain_lut[d]
+    other_indices = self.same_speaker_lut[speaker_id]
     other_indices = self.random2.sample(other_indices, self.n_samples + 1)
 
     entries: list[FeatureEntry] = []
@@ -99,7 +103,8 @@ class IntraDomainDataset(Dataset):
     for i in other_indices:
       if i == index: continue
       if len(entries) == self.n_samples + 1: break
-      d, speaker_id, start = self.starts[i]
+      d, sid2, start = self.starts[i]
+      assert speaker_id == sid2  # 今後は same_speaker_lut が壊れてたらここでエラーになるはず
       entries.append(self.load_entry(d, speaker_id, start + offset, self.frames))
 
     return entries
