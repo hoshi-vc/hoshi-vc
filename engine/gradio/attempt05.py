@@ -8,7 +8,7 @@
 # Inference UI for experiments
 # https://gradio.app/docs/
 
-print("NOTE: If the current source code is different from the one used for training, the result may be incorrect.")
+print("Note: If the current source code is different from the one used for training, the result may be incorrect.")
 
 import os
 
@@ -19,14 +19,14 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from engine.attempt05 import VCModule
+import engine.attempt05a as Attempt
 from engine.dataset_feats import FeatureEntry4, IntraDomainDataset4
 from engine.lib.utils import DATA_DIR, np_safesave
 from engine.prepare import FEATS_DIR, Preparation
 
 # TODO: index.reconstruct_batch を使って key を復元したいけど、なぜかうまくいかなかった。
 
-CKPT = DATA_DIR / "attempt05/checkpoints/fresh-breeze-110/mazhaesz/step=00025001-valid_spksim=0.2574-vcheat_spksim=0.4667.ckpt"
+CKPT = DATA_DIR / "attempt05/checkpoints/hopeful-capybara-3/2rmdgxq8/step=00027001-valid_spksim=0.4919-vcheat_spksim=0.5456.ckpt"
 
 SAVE_DIR = DATA_DIR / "gradio" / CKPT.relative_to(DATA_DIR).with_suffix("")
 MAX_LEN = 100000000000
@@ -78,8 +78,9 @@ def prepare():
 
         ref_energy = model.vc_model.forward_energy(batch.energy.float())
         ref_pitch = model.vc_model.forward_pitch(batch.pitch_i)
-        ref_phoneme = model.vc_model.forward_phoneme(batch.phoneme_i, batch.phoneme_v.float())
-        ref_key = model.vc_model.forward_key(ref_energy, ref_pitch, ref_phoneme)
+        # ref_phoneme = model.vc_model.forward_phoneme(batch.phoneme_i, batch.phoneme_v.float())
+        ref_soft = model.vc_model.forward_w2v2(batch.soft.float())
+        ref_key = model.vc_model.forward_key(ref_energy, ref_pitch, ref_soft)
 
         ref_mel = model.vc_model.forward_mel(batch.mel.float())
         ref_value = model.vc_model.forward_value(ref_energy, ref_pitch, ref_mel)
@@ -122,34 +123,44 @@ def prepare():
     faiss.write_index(index, str(INDEX_FILE) + ".tmp")
     os.replace(str(INDEX_FILE) + ".tmp", INDEX_FILE)
 
-def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift):
+def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift, query_prep):
   energy = P.extract_energy(audio, sr)
-  phoneme_i, phoneme_v = P.extract_phoneme(audio, sr)
+  # phoneme_i, phoneme_v = P.extract_phoneme(audio, sr)
+  soft = P.extract_hubert_soft(audio, sr)
   pitch_i, _ = P.extract_pitch(audio, sr)
 
   with torch.inference_mode():
     energy = energy.to(model.device, torch.float32).unsqueeze(0)
-    phoneme_i = phoneme_i.to(model.device, torch.int64).unsqueeze(0)
-    phoneme_v = phoneme_v.to(model.device, torch.float32).unsqueeze(0)
+    # phoneme_i = phoneme_i.to(model.device, torch.int64).unsqueeze(0)
+    # phoneme_v = phoneme_v.to(model.device, torch.float32).unsqueeze(0)
+    soft = soft.to(model.device, torch.float32).unsqueeze(0)
     pitch_i = pitch_i.to(model.device, torch.float32).unsqueeze(0)
     pitch_i = torch.clamp(pitch_i * pitch_scale + pitch_shift, 0, 360 - 1)
     pitch_i = pitch_i.to(torch.int64)
 
     src_energy = model.vc_model.forward_energy(energy)
     src_pitch = model.vc_model.forward_pitch(pitch_i)
-    src_w2v2 = model.vc_model.forward_phoneme(phoneme_i, phoneme_v)
-    src_key = model.vc_model.forward_key(src_energy, src_pitch, src_w2v2)
+    # src_phoneme = model.vc_model.forward_phoneme(phoneme_i, phoneme_v)
+    src_soft = model.vc_model.forward_w2v2(soft)
+    src_key = model.vc_model.forward_key(src_energy, src_pitch, src_soft)
 
     index = faiss.read_index(str(SAVE_DIR / tgt_speaker_id / "faiss.index"))
     keys = np.load(str(SAVE_DIR / tgt_speaker_id / "keys.npy"), mmap_mode="r")
     values = np.load(str(SAVE_DIR / tgt_speaker_id / "values.npy"), mmap_mode="r")
 
-    _, ref_indices = index.search(src_key.squeeze(0).cpu().numpy(), 16)
-    # ref_keys = index.reconstruct_batch(ref_indices)
-    ref_key = torch.as_tensor(keys[ref_indices])
-    ref_value = torch.as_tensor(values[ref_indices])
-    ref_key = ref_key.to(model.device, torch.float32).flatten(0, 1).unsqueeze(0)
-    ref_value = ref_value.to(model.device, torch.float32).flatten(0, 1).unsqueeze(0)
+    _, ref_indices = index.search(src_key.squeeze(0).cpu().numpy(), 64)
+
+    ref_keys = torch.as_tensor(keys[ref_indices]).to(model.device, torch.float32)
+    ref_values = torch.as_tensor(values[ref_indices]).to(model.device, torch.float32)
+
+    if query_prep == "None": pass
+    elif query_prep == "Top1": src_key = ref_keys[:, 0].unsqueeze(0)
+    elif query_prep == "Top64-Mean": src_key = ref_keys.mean(dim=1).unsqueeze(0)
+    else: raise NotImplementedError
+
+    # ref_key = index.reconstruct_batch(ref_indices)
+    ref_key = ref_keys.flatten(0, 1).unsqueeze(0)
+    ref_value = ref_values.flatten(0, 1).unsqueeze(0)
 
     tgt_value, _ = model.vc_model.lookup(src_key, ref_key, ref_value)
 
@@ -159,17 +170,18 @@ def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift):
 
     return tgt_audio, 22050
 
-# %%
-
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = VCModule.load_from_checkpoint(CKPT, map_location=DEVICE)
+P = Preparation(DEVICE)
+
+Attempt.P = P  # TODO: もっといい方法ない？
+model = Attempt.VCModule.load_from_checkpoint(CKPT, map_location=DEVICE)
 model.eval()
 model.freeze()
 
-P = Preparation(model.device)
-
 prepare()
+
+# %%
 
 # item = P.dataset[500]
 # audio, sr = item.audio[0], item.sr
@@ -224,7 +236,7 @@ speaker_ids = P.dataset.speaker_ids
 #     with gr.Column():
 #       output = gr.Audio(label="Converted Speech", type="numpy", interactive=False)
 
-def process(speaker, upload_audio, mic_audio, pitch_shift):
+def process(speaker, upload_audio, mic_audio, pitch_shift, query_prep):
   # audio = tuple (sample_rate, frames) or (sample_rate, (frames, channels))
   if mic_audio is not None:
     sr, audio = mic_audio
@@ -233,8 +245,16 @@ def process(speaker, upload_audio, mic_audio, pitch_shift):
   else:
     return (22050, np.zeros(0).astype(np.int16))
 
-  audio = torch.as_tensor(audio, dtype=torch.float32, device=model.device) / 32768.0
-  tgt_audio, tgt_sr = convert(audio, sr, speaker, 1.0, pitch_shift)
+  if audio.dtype == np.int16:
+    audio = torch.as_tensor(audio, dtype=torch.float32, device=model.device) / 32768.0
+  elif audio.dtype == np.int32:
+    audio = torch.as_tensor(audio, dtype=torch.float32, device=model.device) / 2147483648.0
+  elif audio.dtype == np.float16 or audio.dtype == np.float32 or audio.dtype == np.float64:
+    audio = torch.as_tensor(audio, dtype=torch.float32, device=model.device)
+  else:
+    raise ValueError("Unsupported dtype")
+
+  tgt_audio, tgt_sr = convert(audio, sr, speaker, 1.0, pitch_shift, query_prep)
 
   tgt_audio = tgt_audio.unsqueeze(0).cpu().numpy() * 32768.0
 
@@ -247,6 +267,7 @@ app = gr.Interface(
         gr.Audio(label="Upload Speech", source="upload", type="numpy"),
         gr.Audio(label="Record Speech", source="microphone", type="numpy"),
         gr.Slider(label="Pitch Shift", minimum=-100, maximum=100, step=1.0, value=0.0),
+        gr.Radio(label="Query Preprocess", choices=["None", "Top1", "Top64-Mean"], value="None"),
     ],
     outputs=[
         gr.Audio(label="Converted Speech", type="numpy"),

@@ -28,7 +28,7 @@ from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
 from engine.lib.fastspeech import FFNBlock, PosFFT
-from engine.lib.layers import Buckets, CLUBSampleForCategorical, GetNth
+from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
 from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
 from engine.utils import (log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
@@ -41,7 +41,7 @@ class VCModel(nn.Module):
 
     energy_dim = hdim // 4
     pitch_dim = hdim // 4
-    phoneme_dim = hdim // 2
+    w2v2_dim = hdim // 2
     mel_dim = hdim // 2
     kv_dim = hdim // 2
 
@@ -50,24 +50,47 @@ class VCModel(nn.Module):
     self.energy_bins = Buckets(-11.0, -3.0, 128)
     self.energy_embed = nn.Embedding(128, energy_dim)
     self.pitch_embed = nn.Embedding(360, pitch_dim)
-    self.phoneme_embed = nn.Embedding(400, phoneme_dim)
+    # self.phoneme_embed = nn.Embedding(400, phoneme_dim)
+    self.w2v2_embed = nn.Linear(256, w2v2_dim)
     self.encode_key = nn.Sequential(
-        nn.Linear(energy_dim + pitch_dim + phoneme_dim, hdim),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.RNN(hdim, hdim, batch_first=True),
-        GetNth(0),
+        nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
         nn.ReLU(),
         nn.LayerNorm(hdim),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.Linear(hdim, kv_dim),
+        Transpose(1, 2),
+        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        Transpose(1, 2),
+        nn.ReLU(),
+        nn.LayerNorm(kv_dim),
     )
 
     self.mel_encode = nn.Linear(80, mel_dim)
     self.encode_value = nn.Sequential(
         nn.Linear(energy_dim + mel_dim, hdim),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.Linear(hdim, kv_dim),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        Transpose(1, 2),
+        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        Transpose(1, 2),
+        nn.ReLU(),
+        nn.LayerNorm(kv_dim),
     )
+
+    # self.encode_key = nn.Sequential(
+    #     nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.RNN(hdim, hdim, batch_first=True),
+    #     GetNth(0),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.Linear(hdim, kv_dim),
+    # )
+    # self.encode_value = nn.Sequential(
+    #     nn.Linear(energy_dim + mel_dim, hdim),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.Linear(hdim, kv_dim),
+    # )
 
     self.lookup = nn.MultiheadAttention(kv_dim, 4, dropout=0.2, batch_first=True)
 
@@ -83,19 +106,22 @@ class VCModel(nn.Module):
   def forward_pitch(self, pitch_i: Tensor):
     return self.pitch_embed(pitch_i[:, :, 0])
 
-  def forward_phoneme(self, phoneme_i: Tensor, phoneme_v: Tensor):
-    phoneme: Optional[Tensor] = None
-    for k in range(phoneme_v.shape[-1]):
-      emb_k = self.phoneme_embed(phoneme_i[:, :, k])
-      emb_k *= phoneme_v[:, :, k].exp().unsqueeze(-1)
-      phoneme = emb_k if phoneme is None else phoneme + emb_k
-    return phoneme
+  # def forward_phoneme(self, phoneme_i: Tensor, phoneme_v: Tensor):
+  #   phoneme: Optional[Tensor] = None
+  #   for k in range(phoneme_v.shape[-1]):
+  #     emb_k = self.phoneme_embed(phoneme_i[:, :, k])
+  #     emb_k *= phoneme_v[:, :, k].exp().unsqueeze(-1)
+  #     phoneme = emb_k if phoneme is None else phoneme + emb_k
+  #   return phoneme
+
+  def forward_w2v2(self, w2v2: Tensor):
+    return self.w2v2_embed(w2v2)
 
   def forward_mel(self, mel: Tensor):
     return self.mel_encode(mel)
 
-  def forward_key(self, energy: Tensor, pitch: Tensor, phoneme: Tensor):
-    return self.encode_key(torch.cat([energy, pitch, phoneme], dim=-1))
+  def forward_key(self, energy: Tensor, pitch: Tensor, w2v2: Tensor):
+    return self.encode_key(torch.cat([energy, pitch, w2v2], dim=-1))
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
     return self.encode_value(torch.cat([energy, mel], dim=-1))
@@ -117,15 +143,17 @@ class VCModel(nn.Module):
 
     batch_energy = torch.stack([o.energy for o in batch]).flatten(0, 1)
     batch_pitch_i = torch.stack([o.pitch_i for o in batch]).flatten(0, 1)
-    batch_phoneme_i = torch.stack([o.phoneme_i for o in batch]).flatten(0, 1)
-    batch_phoneme_v = torch.stack([o.phoneme_v for o in batch]).flatten(0, 1)
+    # batch_phoneme_i = torch.stack([o.phoneme_i for o in batch]).flatten(0, 1)
+    # batch_phoneme_v = torch.stack([o.phoneme_v for o in batch]).flatten(0, 1)
+    batch_w2v2 = torch.stack([o.soft for o in batch]).flatten(0, 1)
     batch_mel = torch.stack([o.mel for o in batch]).flatten(0, 1)
 
     batch_energy = self.forward_energy(batch_energy)
     batch_pitch = self.forward_pitch(batch_pitch_i)
-    batch_phoneme = self.forward_phoneme(batch_phoneme_i, batch_phoneme_v)
+    # batch_phoneme = self.forward_phoneme(batch_phoneme_i, batch_phoneme_v)
+    batch_w2v2 = self.forward_w2v2(batch_w2v2)
     batch_mel = self.forward_mel(batch_mel)
-    batch_key = self.forward_key(batch_energy, batch_pitch, batch_phoneme)
+    batch_key = self.forward_key(batch_energy, batch_pitch, batch_w2v2)
     batch_value = self.forward_value(batch_energy, batch_pitch, batch_mel)
 
     # (n_refs, n_batch, seq_len, feat_dim)
@@ -309,7 +337,7 @@ class VCModule(L.LightningModule):
 
     # discriminator, e2e
 
-    total_model = vc_reconst * 60
+    total_model = vc_reconst * 150.0
     y_g_hat = None
     y_g_hat_mel = None
     if debug or e2e:
@@ -401,10 +429,9 @@ class VCModule(L.LightningModule):
 
     # generator
 
-    total_model += 0.01 * mi_val
-    # total_model += 0.01 + mi_ksp
-    total_model += spd_g_fm
-    total_model += spd_g_pos - spd_g_neg
+    total_model += 0.1 * mi_val
+    total_model += 0.1 + mi_ksp
+    # total_model += spd_g_fm + spd_g_pos - spd_g_neg
 
     if train:
       self.toggle_optimizer(opt_model)
@@ -423,7 +450,7 @@ class VCModule(L.LightningModule):
     step = self.batches_that_stepped()
     milestones = self.milestones
     progress2 = (step - milestones[2]) / (milestones[3] - milestones[2])
-    self_ratio = 1.0 - clamp(progress2, 0.0, 1.0) * 0.8
+    self_ratio = 1.0 - clamp(progress2, 0.0, 1.0) * 0.4  # TODO
     self.log("Charts (General)/self_ratio", self_ratio)
 
     opt_model, opt_club, opt_d, opt_spd = self.optimizers()
@@ -562,12 +589,13 @@ class VCModule(L.LightningModule):
       # これは逆に遅くなる & プロファイラで見る限り途中から fused じゃなくなる
       # self.vocoder = torch.jit.trace(self.vocoder, torch.randn(1, 80, 256, device=self.device))
 
+    # TODO: resume 時に step に渡される値がリセットされていそう
     sch_model = S.ChainedScheduler([
         get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
-        S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[0]) / 1000) if step >= self.e2e_milestones[0] else 1.0),
-        S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[2]) / 1000) if step >= self.e2e_milestones[2] else 1.0),
+        # S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[0]) / 1000) if step >= self.e2e_milestones[0] else 1.0),
+        S.MultiplicativeLR(opt_model, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0),
     ])
-    sch_club = S.MultiplicativeLR(opt_club, lambda step: 1.0)
+    sch_club = S.LambdaLR(opt_club, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
     sch_spd = S.MultiplicativeLR(opt_spd, lambda step: 1.0)
 
@@ -575,15 +603,16 @@ class VCModule(L.LightningModule):
 
 if __name__ == "__main__":
 
-  PROJECT = Path(__file__).stem
+  PROJECT = Path(__file__).stem.split("_")[0].split(" ")[0]
 
   setup_train_environment()
 
   P = Preparation("cuda")
 
-  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=8, batch_size=8, n_batches=1000, n_batches_val=200)
+  datamodule = IntraDomainDataModule4(P, frames=256, n_samples=16, batch_size=8, n_batches=1000, n_batches_val=200)
 
   total_steps = 100000
+  total_actual_steps = 50000
   complex_metrics_batches = 50  # see: validation_step
 
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
@@ -591,13 +620,13 @@ if __name__ == "__main__":
 
   model = VCModule(
       hdim=512,
-      lr=1e-4,
-      lr_club=1e-4,
-      lr_spd=1e-4,
+      lr=1e-3,
+      lr_club=1e-3,
+      lr_spd=1e-3,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 10000, 20000),
-      e2e_milestones=(22000, 30000, 40000),
+      milestones=(0, 1, 2000, 10000),
+      e2e_milestones=(10000, 12000, 30000),
       e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
       grad_clip=1.0,
       hifi_gan=AttrDict({
@@ -635,7 +664,7 @@ if __name__ == "__main__":
   wandb_logger = new_wandb_logger(PROJECT)
 
   trainer = L.Trainer(
-      max_epochs=int(ceil(total_steps / datamodule.n_batches)),
+      max_epochs=int(ceil(total_actual_steps / datamodule.n_batches)),
       logger=wandb_logger,
       callbacks=[
           new_checkpoint_callback_wandb(
@@ -649,6 +678,7 @@ if __name__ == "__main__":
       accelerator="gpu",
       precision="16-mixed",
       benchmark=True,
+      # detect_anomaly=True,
       # deterministic=True,
       # detect_anomaly=True,
       # profiler=profilers.PyTorchProfiler(
