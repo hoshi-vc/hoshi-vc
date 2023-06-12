@@ -181,8 +181,10 @@ class VCModule(L.LightningModule):
             dims=[64, 128, 512, 128, 64],
             kernels=[3, 5, 5, 5, 3],
             strides=[1, 2, 2, 1, 1],
+            use_spectral_norm=False,  # spectral norm の weight / sigma で div by zero になってたので
         ),
-        len(P.dataset.speaker_ids),
+        len(P.dataset.speaker_ids) * 2,  # ADC-GAN
+        norm_feats=True,
     )
 
     self.batch_rand = Random(94324203)
@@ -254,8 +256,8 @@ class VCModule(L.LightningModule):
 
     spd_real, _ = self.speaker_d(mel.detach())
     spd_fake, _ = self.speaker_d(mel_hat.detach())
-    spd_loss_real = aux_loss(spd_real, batch[0].speaker)
-    spd_loss_fake = aux_loss(spd_fake, batch[0].speaker)
+    spd_loss_real = aux_loss(spd_real, batch[0].speaker * 2)
+    spd_loss_fake = aux_loss(spd_fake, batch[0].speaker * 2 + 1)
     spd_loss = spd_loss_real + spd_loss_fake
 
     if train:
@@ -388,13 +390,15 @@ class VCModule(L.LightningModule):
     for f1, f2 in zip(spd_f_real, spd_f_fake):
       spd_g_fm += torch.mean(torch.abs(f1 - f2))
 
-    spd_g = aux_loss(spd_c_fake, batch[0].speaker)
+    spd_g_pos = aux_loss(spd_c_fake, batch[0].speaker * 2)
+    spd_g_neg = aux_loss(spd_c_fake, batch[0].speaker * 2 + 1)
 
     if log:
       self.log(f"{log}_spd_loss_fm", spd_g_fm)
-      self.log(f"{log}_spd_g_loss", spd_g)
+      self.log(f"{log}_spd_g_pos_loss", spd_g_pos)
+      self.log(f"{log}_spd_g_neg_loss", spd_g_neg)
 
-    total_model += spd_g_fm + spd_g
+    total_model += spd_g_fm + spd_g_pos - spd_g_neg
 
     # generator
 

@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.utils.spectral_norm import spectral_norm
+from torch.nn.utils.weight_norm import weight_norm
 
 # ACGAN:     https://arxiv.org/abs/1610.09585
 # PD-GAN:    https://arxiv.org/abs/1802.05637
@@ -20,8 +21,9 @@ class BasicDiscriminator(nn.Module):
   # Based on GANSpeech :: https://arxiv.org/pdf/2106.15153.pdf
   # Conv1d に spectral_norm をかけた。
   # Conditioning は取り除いた。
-  def __init__(self, dims: list[int], kernels: list[int], strides: list[int]):
+  def __init__(self, dims: list[int], kernels: list[int], strides: list[int], use_spectral_norm: bool):
     super().__init__()
+    norm_f = weight_norm if use_spectral_norm == False else spectral_norm
 
     # dims: (hdim1, hdim2, ..., odim)
     assert len(dims) == len(kernels) == len(strides)
@@ -34,7 +36,7 @@ class BasicDiscriminator(nn.Module):
 
       if not last:
         modules = [
-            spectral_norm(nn.Conv2d(dims[i], dims[i + 1], kernels[i], strides[i], kernels[i] // 2)),
+            norm_f(nn.Conv2d(dims[i], dims[i + 1], kernels[i], strides[i], kernels[i] // 2)),
             # nn.InstanceNorm2d(dims[i + 1]),
             # nn.BatchNorm2d(dims[i + 1]),
             nn.LeakyReLU(0.2),
@@ -43,7 +45,7 @@ class BasicDiscriminator(nn.Module):
       else:
         modules = [
             nn.AdaptiveAvgPool2d(1),  # 1x1 の画像にまとめる
-            spectral_norm(nn.Conv2d(dims[i], dims[i + 1], kernels[i], strides[i], kernels[i] // 2)),
+            norm_f(nn.Conv2d(dims[i], dims[i + 1], kernels[i], strides[i], kernels[i] // 2)),
         ]
 
       blocks += [nn.Sequential(*modules)]
@@ -66,10 +68,11 @@ class BasicDiscriminator(nn.Module):
     return out, features
 
 class ACDiscriminator(nn.Module):
-  def __init__(self, base: BasicDiscriminator, n_class: int):
+  def __init__(self, base: BasicDiscriminator, n_class: int, norm_feats: bool):
     super().__init__()
     self.base = base
     self.aux_linear = nn.Linear(base.odim, n_class)
+    self.norm_feats = norm_feats
 
   def forward(self, x: Tensor):
     # x: (batch, time, freq)
@@ -80,6 +83,15 @@ class ACDiscriminator(nn.Module):
 
     features += [out]
     c = self.aux_linear(out)
+
+    # Feature Normalization :: Proposed by ReACGAN
+    # TODO: ReACGAN では self.aux_linear の weights も normalize している
+    #       ただ、公式実装を見ると、バグがあって weights の normalize はできてない
+    #       （ self.linear2.parameters() の normalize したあとのテンソルをパラメーターにセットできてない :: Python にポインターはないので ）
+    #       だから別にこのままでいいかなって思ってる。（勾配を維持しながら値だけ書き換えるとか、できるのかもしていいのかもわからないし）
+    #       ref: https://github.com/POSTECH-CVLab/PyTorch-StudioGAN/blob/e95bcd46372573581ae8b34c083e65bd5e4e0e9e/src/models/big_resnet.py#L383
+    if self.norm_feats:
+      out = F.normalize(out, dim=1)  # 超球面上に投影
 
     return c, features
 
