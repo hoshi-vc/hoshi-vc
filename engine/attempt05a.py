@@ -250,7 +250,7 @@ class VCModule(L.LightningModule):
     vc_reconst = F.l1_loss(mel_hat, mel)
 
     if log:
-      self.log(f"{log}_reconst", vc_reconst)
+      self.log(f"Charts (Main)/{log}_reconst", vc_reconst)
 
     # speaker discriminator
 
@@ -269,9 +269,9 @@ class VCModule(L.LightningModule):
       self.untoggle_optimizer(opt_spd)
 
     if log:
-      self.log(f"{log}_spd_loss", spd_loss)
-      self.log(f"{log}_spd_loss_real", spd_loss_real)
-      self.log(f"{log}_spd_loss_fake", spd_loss_fake)
+      self.log(f"Charts (SPD)/{log}_spd", spd_loss)
+      self.log(f"Charts (SPD)/{log}_spd_real", spd_loss_real)
+      self.log(f"Charts (SPD)/{log}_spd_fake", spd_loss_fake)
 
     # CLUB
 
@@ -300,12 +300,12 @@ class VCModule(L.LightningModule):
       self.untoggle_optimizer(opt_club)
 
     if log:
-      self.log(f"{log}_mi_val", mi_val)
-      self.log(f"{log}_mi_key", mi_key)
-      self.log(f"{log}_mi_ksp", mi_ksp)
-      self.log(f"{log}_loss_club_val", club_val)
-      self.log(f"{log}_loss_club_key", club_key)
-      self.log(f"{log}_loss_club_ksp", club_ksp)
+      self.log(f"Charts (Main)/{log}_mi_val", mi_val)
+      self.log(f"Charts (Main)/{log}_mi_key", mi_key)
+      self.log(f"Charts (Main)/{log}_mi_ksp", mi_ksp)
+      self.log(f"Charts (CLUB)/{log}_club_val", club_val)
+      self.log(f"Charts (CLUB)/{log}_club_key", club_key)
+      self.log(f"Charts (CLUB)/{log}_club_ksp", club_ksp)
 
     # discriminator, e2e
 
@@ -349,9 +349,9 @@ class VCModule(L.LightningModule):
         self.untoggle_optimizer(opt_d)
 
       if log:
-        self.log(f"{log}_loss_disc", total_disc)
-        self.log(f"{log}_e2e_disc_f", loss_disc_f)
-        self.log(f"{log}_e2e_disc_s", loss_disc_s)
+        self.log(f"Charts (Main)/{log}_e2e_disc", total_disc)
+        self.log(f"Charts (E2E)/{log}_e2e_disc_f", loss_disc_f)
+        self.log(f"Charts (E2E)/{log}_e2e_disc_s", loss_disc_s)
 
       # e2e generator loss
 
@@ -371,11 +371,12 @@ class VCModule(L.LightningModule):
       total_model = total_model * (1.0 - e2e_ratio) + e2e_model_loss * e2e_ratio
 
       if log:
-        self.log(f"{log}_e2e_gen_f", loss_gen_f)
-        self.log(f"{log}_e2e_gen_s", loss_gen_s)
-        self.log(f"{log}_e2e_fm_f", loss_fm_f)
-        self.log(f"{log}_e2e_fm_s", loss_fm_s)
-        self.log(f"{log}_e2e_mel", loss_mel)
+        self.log(f"Charts (E2E)/{log}_e2e_gen_f", loss_gen_f)
+        self.log(f"Charts (E2E)/{log}_e2e_gen_s", loss_gen_s)
+        self.log(f"Charts (E2E)/{log}_e2e_fm_f", loss_fm_f)
+        self.log(f"Charts (E2E)/{log}_e2e_fm_s", loss_fm_s)
+        self.log(f"Charts (Main)/{log}_e2e_reconst", loss_mel)
+        self.log(f"Charts (General)/{log}_e2e_ratio", e2e_ratio)
 
       y_g_hat = y_g_hat.squeeze(1)
       y_g_hat_mel = y_g_hat_mel.transpose(1, 2)
@@ -394,16 +395,16 @@ class VCModule(L.LightningModule):
     spd_g_neg = aux_loss(spd_c_fake, batch[0].speaker * 2 + 1)
 
     if log:
-      self.log(f"{log}_spd_loss_fm", spd_g_fm)
-      self.log(f"{log}_spd_g_pos_loss", spd_g_pos)
-      self.log(f"{log}_spd_g_neg_loss", spd_g_neg)
-
-    total_model += spd_g_fm + spd_g_pos - spd_g_neg
+      self.log(f"Charts (SPD)/{log}_spd_g_fm", spd_g_fm)
+      self.log(f"Charts (SPD)/{log}_spd_g_pos", spd_g_pos)
+      self.log(f"Charts (SPD)/{log}_spd_g_neg", spd_g_neg)
 
     # generator
 
     total_model += 0.01 * mi_val
     # total_model += 0.01 + mi_ksp
+    total_model += spd_g_fm
+    total_model += spd_g_pos - spd_g_neg
 
     if train:
       self.toggle_optimizer(opt_model)
@@ -414,7 +415,7 @@ class VCModule(L.LightningModule):
       self.untoggle_optimizer(opt_model)
 
     if log:
-      self.log(f"{log}_loss", total_model)
+      self.log(f"Charts (Main)/{log}_loss", total_model)
 
     return mel_hat, y_g_hat, y_g_hat_mel, vc_attn
 
@@ -423,14 +424,14 @@ class VCModule(L.LightningModule):
     milestones = self.milestones
     progress2 = (step - milestones[2]) / (milestones[3] - milestones[2])
     self_ratio = 1.0 - clamp(progress2, 0.0, 1.0) * 0.8
-    self.log("self_ratio", self_ratio)
+    self.log("Charts (General)/self_ratio", self_ratio)
 
     opt_model, opt_club, opt_d, opt_spd = self.optimizers()
     sch_model, sch_club, sch_d, sch_spd = self.lr_schedulers()
-    self.log("lr", opt_model.optimizer.param_groups[0]["lr"])
-    self.log("lr_club", opt_club.optimizer.param_groups[0]["lr"])
-    self.log("lr_d", opt_d.optimizer.param_groups[0]["lr"])
-    self.log("lr_spd", opt_spd.optimizer.param_groups[0]["lr"])
+    self.log("Charts (General)/lr", opt_model.optimizer.param_groups[0]["lr"])
+    self.log("Charts (General)/lr_club", opt_club.optimizer.param_groups[0]["lr"])
+    self.log("Charts (General)/lr_d", opt_d.optimizer.param_groups[0]["lr"])
+    self.log("Charts (General)/lr_spd", opt_spd.optimizer.param_groups[0]["lr"])
 
     self._process_batch(batch, self_ratio, step, e2e=step >= self.e2e_milestones[0], e2e_frames=self.e2e_frames, train=True, log="train")
 
@@ -462,6 +463,8 @@ class VCModule(L.LightningModule):
       y_c_spkemb = P.spkemb(y_c, 22050)
       v_spksim = F.cosine_similarity(y_spkemb, y_v_spkemb)
       c_spksim = F.cosine_similarity(y_spkemb, y_c_spkemb)
+      self.log("Charts (SpkSim)/valid_spksim", v_spksim.mean())
+      self.log("Charts (SpkSim)/vcheat_spksim", c_spksim.mean())
       self.log("valid_spksim", v_spksim.mean())
       self.log("vcheat_spksim", c_spksim.mean())
 
@@ -481,12 +484,12 @@ class VCModule(L.LightningModule):
       c2_spksim_leak = F.cosine_similarity(rotate(y_spkemb), yc2_spkemb)
       v2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yv2_spkemb))
       c2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yc2_spkemb))
-      self.log("valid_spksim_vc", v2_spksim.mean())
-      self.log("vcheat_spksim_vc", c2_spksim.mean())
-      self.log("valid_spksim_leak", v2_spksim_leak.mean())
-      self.log("vcheat_spksim_leak", c2_spksim_leak.mean())
-      self.log("valid_spksim_base", v2_spksim_irrelevent.mean())
-      self.log("vcheat_spksim_base", c2_spksim_irrelevent.mean())
+      self.log("Charts (SpkSim)/valid_spksim_vc", v2_spksim.mean())
+      self.log("Charts (SpkSim)/vcheat_spksim_vc", c2_spksim.mean())
+      self.log("Charts (SpkSim)/valid_spksim_leak", v2_spksim_leak.mean())
+      self.log("Charts (SpkSim)/vcheat_spksim_leak", c2_spksim_leak.mean())
+      self.log("Charts (SpkSim)/valid_spksim_base", v2_spksim_irrelevent.mean())
+      self.log("Charts (SpkSim)/vcheat_spksim_base", c2_spksim_irrelevent.mean())
 
       self.val_outputs.append({"valid_spksim": v_spksim, "vcheat_spksim": c_spksim, "valid_spksim_vc": v2_spksim, "vcheat_spksim_vc": c2_spksim})
 
@@ -506,10 +509,10 @@ class VCModule(L.LightningModule):
       c_spksim = torch.cat([x["vcheat_spksim"] for x in self.val_outputs]).cpu().numpy()
       v2_spksim = torch.cat([x["valid_spksim_vc"] for x in self.val_outputs]).cpu().numpy()
       c2_spksim = torch.cat([x["vcheat_spksim_vc"] for x in self.val_outputs]).cpu().numpy()
-      self.log_wandb({"Spksim/valid_hist": wandb.Histogram(v_spksim)})
-      self.log_wandb({"Spksim/vcheat_hist": wandb.Histogram(c_spksim)})
-      self.log_wandb({"Spksim/valid_hist_vc": wandb.Histogram(v2_spksim)})
-      self.log_wandb({"Spksim/vcheat_hist_vc": wandb.Histogram(c2_spksim)})
+      self.log_wandb({"Charts (SpkSim)/valid_hist": wandb.Histogram(v_spksim)})
+      self.log_wandb({"Charts (SpkSim)/vcheat_hist": wandb.Histogram(c_spksim)})
+      self.log_wandb({"Charts (SpkSim)/valid_hist_vc": wandb.Histogram(v2_spksim)})
+      self.log_wandb({"Charts (SpkSim)/vcheat_hist_vc": wandb.Histogram(c2_spksim)})
 
     self.val_outputs.clear()
 
