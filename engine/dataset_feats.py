@@ -229,6 +229,7 @@ class FeatureEntry4(NamedTuple):
   phoneme_v: Tensor
   pitch_i: Tensor
   pitch_v: Tensor
+  soft: Tensor
   w2v2: Tensor
 
 IntraDomainEntry4 = list[FeatureEntry4]
@@ -246,6 +247,7 @@ class IntraDomainDataset4(IntraDomainDataset):
         phoneme_v=np.array(np.load(d / f"phoneme_v_{PHONEME_TOPK}.npy", mmap_mode="r")[start:end]),
         pitch_i=np.array(np.load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end], np.int64),
         pitch_v=np.array(np.load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy", mmap_mode="r")[start:end]),
+        soft=np.array(np.load(d / "hubert_soft.npy", mmap_mode="r")[start:end]),
         w2v2=np.array(np.load(d / "wav2vec2.npy", mmap_mode="r")[start:end]),
     )
 

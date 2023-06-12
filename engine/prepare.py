@@ -21,7 +21,7 @@ from torchaudio.functional import resample
 from tqdm import tqdm
 
 from engine.lib.dataset_jvs import JVS, JVSCategory
-from engine.lib.feats import Audio, Energy, MelSpec, Phoneme, Pitch, Wav2Vec2
+from engine.lib.feats import (Audio, Energy, HubertSoft, MelSpec, Phoneme, Pitch, Wav2Vec2)
 from engine.lib.trim import trim_silence
 from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
 from engine.lib.vocoder import HiFiGAN
@@ -77,6 +77,10 @@ class Preparation:
   def extract_phoneme(self):
     return Phoneme.load("facebook/wav2vec2-xlsr-53-espeak-cv-ft", PHONEME_TOPK).to(self.device)
 
+  @cached_property
+  def extract_hubert_soft(self):
+    return HubertSoft.load(soft=True).to(self.device)
+
   def prepare_feats(self):
     for category_id in ["parallel100", "nonpara30"]:
       for speaker_id in self.dataset.speaker_ids:
@@ -89,9 +93,10 @@ class Preparation:
         WAV2VEC2 = DIR / "wav2vec2.npy"
         PHONEME_I = DIR / f"phoneme_i_{PHONEME_TOPK}.npy"
         PHONEME_V = DIR / f"phoneme_v_{PHONEME_TOPK}.npy"
+        HUBERT_SOFT = DIR / "hubert_soft.npy"
 
         if AUDIO.exists() and MELSPEC.exists() and ENERGY.exists() and PITCH_I.exists() and PITCH_V.exists() and WAV2VEC2.exists() and PHONEME_I.exists(
-        ) and PHONEME_V.exists():
+        ) and PHONEME_V.exists() and HUBERT_SOFT.exists():
           continue
 
         audio_list: list[NPArray] = []
@@ -102,6 +107,7 @@ class Preparation:
         phoneme_v_list: list[NPArray] = []
         pitch_i_list: list[NPArray] = []
         pitch_v_list: list[NPArray] = []
+        hubert_soft_list: list[NPArray] = []
 
         target_i = [i for i, x in enumerate(self.dataset_noaudio) if x.speaker_id == speaker_id and x.category_id == category_id]
 
@@ -120,6 +126,7 @@ class Preparation:
           wav2vec2 = self.extract_wav2vec2(audio, sr)
           phoneme_i, phoneme_v = self.extract_phoneme(audio, sr)
           pitch_i, pitch_v = self.extract_pitch(audio, sr)
+          hubert_soft = self.extract_hubert_soft(audio, sr)
 
           audio_feat = audio_feat.cpu().numpy()
           mel = mel.cpu().numpy()
@@ -129,6 +136,7 @@ class Preparation:
           phoneme_v = phoneme_v.cpu().numpy()
           pitch_i = pitch_i.cpu().numpy()
           pitch_v = pitch_v.cpu().numpy()
+          hubert_soft = hubert_soft.cpu().numpy()
 
           # append to storage
           audio_list.append(audio_feat)
@@ -139,6 +147,7 @@ class Preparation:
           phoneme_v_list.append(phoneme_v)
           pitch_i_list.append(pitch_i)
           pitch_v_list.append(pitch_v)
+          hubert_soft_list.append(hubert_soft)
 
         # print(w2v2_list[0].dtype, mel_list[0].dtype, pitch_i_list[0].dtype, pitch_v_list[0].dtype)
 
@@ -151,6 +160,7 @@ class Preparation:
         np_safesave(PHONEME_V, np.concatenate(phoneme_v_list))
         np_safesave(PITCH_I, np.concatenate(pitch_i_list))
         np_safesave(PITCH_V, np.concatenate(pitch_v_list))
+        np_safesave(HUBERT_SOFT, np.concatenate(hubert_soft_list))
 
   def prepare_faiss(self):
     for speaker_id in tqdm(self.dataset.speaker_ids, ncols=0, desc="Building index", leave=False):
@@ -203,6 +213,9 @@ class Preparation:
     i = np.load(FEATS_DIR / category_id / speaker_id / f"phoneme_i_{PHONEME_TOPK}.npy")
     v = np.load(FEATS_DIR / category_id / speaker_id / f"phoneme_v_{PHONEME_TOPK}.npy")
     return i, v
+
+  def get_hubert_soft(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
+    return np.load(FEATS_DIR / category_id / speaker_id / f"hubert_soft.npy")
 
   def get_index(self, speaker_id: str) -> faiss.IndexHNSWFlat:
     return faiss.read_index(str(FAISS_DIR / f"{speaker_id}.index"))

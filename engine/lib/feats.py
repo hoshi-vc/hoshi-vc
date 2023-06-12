@@ -10,7 +10,7 @@
 # NOTE: phoneme の場合に、同じ音素が二連続に入ることがあるけど、モデルの方でうまくやってくれると願う
 
 from os import PathLike
-from typing import Optional
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -250,6 +250,44 @@ class Phoneme:  # indices, logits : (feat_len, topk), (feat_len, topk)
     model.eval()
     return Phoneme(preprocessor, model, topk)
 
+class HubertSoft:  # (feat_len, 256)
+  # https://github.com/bshall/hubert
+  def __init__(self, model: Any):
+    self.model = model
+
+  def __call__(self, audio: Tensor, sr: int) -> Tensor:
+    audio, sr = to22050(audio, sr)
+    flen = feat_len(audio, sr)
+
+    with torch.no_grad():
+      # F.pad しなくても len(units) == len(audio16k) // 320 になってた
+      inputs = resample(audio, sr, 16000)
+      units = self.model.units(inputs.unsqueeze(0).unsqueeze(0).to(self.device)).squeeze(0)
+      units = units
+
+    # 長さを調節する前に、予想通りの縮小率になっていることを確認する
+    assert abs(len(units) * 320 / 16000 - flen * 256 / 22050) <= 0.02
+
+    units = interp_nearest(units, flen).to(torch.float16)
+
+    assert_torch(units, torch.float16, flen, 256)
+    return units
+
+  def to(self, device: torch.device):
+    self.model = self.model.to(device)
+    return self
+
+  @property
+  def device(self) -> torch.device:
+    return next(self.model.parameters()).device
+
+  @staticmethod
+  def load(soft: bool):
+    if soft:
+      return HubertSoft(torch.hub.load("bshall/hubert:main", "hubert_soft"))
+    else:
+      return HubertSoft(torch.hub.load("bshall/hubert:main", "hubert_discrete"))
+
 if __name__ == "__main__":
   from tqdm import tqdm
 
@@ -263,9 +301,11 @@ if __name__ == "__main__":
   extract_mel = MelSpec()
   # extract_w2v2 = Wav2Vec2.load("facebook/wav2vec2-base")
   extract_pitch = Pitch("tiny", 1)
+  # extract_hubert = HubertSoft.load(soft=True)
 
   for i in range(50):
     j = 512 - 10 + i
     aslice = audio[:j]
     # print(j, extract_w2v2(aslice, sr).shape)
     print(j, extract_pitch(aslice, sr)[0].shape)
+    # print(j, extract_hubert(aslice, sr).shape)
