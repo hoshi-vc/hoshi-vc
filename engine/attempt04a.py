@@ -24,8 +24,9 @@ from wandb.wandb_run import Run
 
 from engine.dataset_feats import IntraDomainDataModule3, IntraDomainEntry3
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
+from engine.lib.club import CLUBSampleForCategorical
 from engine.lib.fastspeech import PosFFT
-from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
+from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import clamp
 from engine.prepare import Preparation
 from engine.utils import (log_audios, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)

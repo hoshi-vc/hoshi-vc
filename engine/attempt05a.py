@@ -27,8 +27,9 @@ from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDo
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
+from engine.lib.club import CLUBSampleForCategorical
 from engine.lib.fastspeech import FFNBlock, PosFFT
-from engine.lib.layers import Buckets, CLUBSampleForCategorical, Transpose
+from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
 from engine.utils import (log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
