@@ -23,8 +23,9 @@ from tqdm import tqdm
 from engine.lib.dataset_jvs import JVS, JVSCategory
 from engine.lib.feats import (Audio, Energy, HubertSoft, MelSpec, Phoneme, Pitch, Wav2Vec2)
 from engine.lib.trim import trim_silence
-from engine.lib.utils import (DATA_DIR, Device, NPArray, make_parents, np_safesave)
+from engine.lib.utils import Device, NPArray, make_parents, np_safesave
 from engine.lib.vocoder import HiFiGAN
+from engine.utils import DATA_DIR
 
 PITCH_TOPK = 8
 CREPE_MODEL = "tiny"

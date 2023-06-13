@@ -4,6 +4,7 @@
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 from os import path
+from pathlib import Path
 from typing import Optional
 
 import matplotlib
@@ -16,9 +17,10 @@ from lightning.pytorch.loggers import WandbLogger
 from matplotlib import pyplot as plt
 from torch import Tensor
 
-from engine.lib.utils import DATA_DIR
 from engine.lib.utils_ui import (plot_attention, plot_spectrograms, plot_spectrograms2)
 from engine.prepare import Preparation
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 def setup_train_environment(seed=90212374):
   seed_everything(seed, workers=True)

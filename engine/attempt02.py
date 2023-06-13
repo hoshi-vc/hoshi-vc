@@ -20,9 +20,10 @@ from tqdm import tqdm
 
 from engine.dataset_feats import FeatureDataset, FeatureEntry
 from engine.lib.layers import GradientReversal
-from engine.lib.utils import DATA_DIR, NPArray, clamp, save_ckpt
+from engine.lib.utils import NPArray, clamp, save_ckpt
 from engine.lib.utils_ui import play_audio, plot_spectrogram
 from engine.prepare import (CREPE_MODEL, FEATS_DIR, PITCH_TOPK, Preparation, pad_clip)
+from engine.utils import DATA_DIR
 
 device = "cuda"
 

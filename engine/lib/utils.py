@@ -24,8 +24,6 @@ T = TypeVar("T")
 NPArray = NDArray[Any]
 Device = Union["TorchDevice", str]
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-
 def extract_zip(src: Path | str, dest: Path | str) -> list[str]:
   with zipfile.ZipFile(src, "r") as zf:
     for file in tqdm(zf.namelist(), ncols=0):

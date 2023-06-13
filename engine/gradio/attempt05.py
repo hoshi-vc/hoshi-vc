@@ -21,8 +21,9 @@ from tqdm import tqdm
 
 import engine.attempt05a as Attempt
 from engine.dataset_feats import FeatureEntry4, IntraDomainDataset4
-from engine.lib.utils import DATA_DIR, np_safesave
+from engine.lib.utils import np_safesave
 from engine.prepare import FEATS_DIR, Preparation
+from engine.utils import DATA_DIR
 
 # TODO: index.reconstruct_batch を使って key を復元したいけど、なぜかうまくいかなかった。
 

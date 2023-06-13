@@ -29,9 +29,9 @@ from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.club import CLUBSampleForCategorical
 from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, GetNth
-from engine.lib.utils import DATA_DIR, AttrDict, clamp, hide_warns
+from engine.lib.utils import AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
-from engine.utils import (log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
+from engine.utils import (DATA_DIR, log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
