@@ -20,7 +20,6 @@ import wandb
 from lightning.pytorch import profilers
 from torch import Tensor, nn
 from torch.optim import AdamW
-from wandb.wandb_run import Run
 
 import engine.hifi_gan.models as VOC
 from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDomainEntry4)
@@ -32,7 +31,8 @@ from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
-from engine.utils import (DATA_DIR, log_attentions, log_audios2, log_spectrograms, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment)
+from engine.utils import (DATA_DIR, BaseLightningModule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim, new_checkpoint_callback_wandb,
+                          new_wandb_logger, setup_train_environment, shuffle_dim0, step_optimizer)
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -181,7 +181,7 @@ class VCModel(nn.Module):
 
     return tgt_mel, (ref_key, ref_value, ref_pitch_i, attn)
 
-class VCModule(L.LightningModule):
+class VCModule(BaseLightningModule):
   def __init__(self,
                hdim: int,
                lr: float,
@@ -239,15 +239,6 @@ class VCModule(L.LightningModule):
     # https://lightning.ai/docs/pytorch/stable/notebooks/lightning_examples/basic-gan.html
     self.automatic_optimization = False
 
-  def batches_that_stepped(self):
-    # https://github.com/Lightning-AI/lightning/issues/13752
-    # same as 'trainer/global_step' of wandb logger
-    return self.trainer.fit_loop.epoch_loop._batches_that_stepped
-
-  def log_wandb(self, item: dict):
-    wandb_logger: Run = self.logger.experiment
-    wandb_logger.log(item, step=self.batches_that_stepped())
-
   def _process_batch(self,
                      batch: IntraDomainEntry4,
                      self_ratio: float,
@@ -290,12 +281,7 @@ class VCModule(L.LightningModule):
     spd_loss = spd_loss_real + spd_loss_fake
 
     if train:
-      self.toggle_optimizer(opt_spd)
-      opt_spd.zero_grad()
-      self.manual_backward(spd_loss)
-      self.clip_gradients(opt_spd, gradient_clip_val=self.grad_clip)
-      opt_spd.step()
-      self.untoggle_optimizer(opt_spd)
+      step_optimizer(self, opt_spd, spd_loss, self.grad_clip)
 
     if log:
       self.log(f"Charts (SPD)/{log}_spd", spd_loss)
@@ -308,7 +294,7 @@ class VCModule(L.LightningModule):
     club_x_key = ref_key
     club_y = ref_pitch_i[:, :, 0]
     club_sp_y = batch[0].speaker.repeat(1, ref_key.shape[1])
-    club_sp_n = batch[0].speaker[torch.randperm(batch[0].speaker.shape[0])].repeat(1, ref_key.shape[1])
+    club_sp_n = shuffle_dim0(batch[0].speaker).repeat(1, ref_key.shape[1])
 
     mi_val = self.club_val(club_x_val, club_y)
     mi_key = self.club_key(club_x_key, club_y)
@@ -321,12 +307,7 @@ class VCModule(L.LightningModule):
     total_club = club_val + club_key + club_ksp
 
     if train:
-      self.toggle_optimizer(opt_club)
-      opt_club.zero_grad()
-      self.manual_backward(total_club, retain_graph=True)
-      self.clip_gradients(opt_club, gradient_clip_val=self.grad_clip)
-      opt_club.step()
-      self.untoggle_optimizer(opt_club)
+      step_optimizer(self, opt_club, total_club, self.grad_clip, retain_graph=True)
 
     if log:
       self.log(f"Charts (Main)/{log}_mi_val", mi_val)
@@ -370,12 +351,7 @@ class VCModule(L.LightningModule):
       total_disc = loss_disc_s + loss_disc_f
 
       if train:
-        self.toggle_optimizer(opt_d)
-        opt_d.zero_grad()
-        self.manual_backward(total_disc)
-        self.clip_gradients(opt_d, gradient_clip_val=self.grad_clip)
-        opt_d.step()  # この行をコメントアウトしない場合、 e2e_milestones[0] 以降で generator のスコアも一気に低下していた。
-        self.untoggle_optimizer(opt_d)
+        step_optimizer(self, opt_d, total_disc, self.grad_clip)
 
       if log:
         self.log(f"Charts (Main)/{log}_e2e_disc", total_disc)
@@ -416,10 +392,7 @@ class VCModule(L.LightningModule):
       _, spd_f_real = self.speaker_d(mel)
     spd_c_fake, spd_f_fake = self.speaker_d(mel_hat)
 
-    spd_g_fm = torch.as_tensor(0., device=self.device)
-    for f1, f2 in zip(spd_f_real, spd_f_fake):
-      spd_g_fm += torch.mean(torch.abs(f1 - f2))
-
+    spd_g_fm = fm_loss(spd_f_real, spd_f_fake, F.l1_loss)
     spd_g_pos = aux_loss(spd_c_fake, batch[0].speaker * 2)
     spd_g_neg = aux_loss(spd_c_fake, batch[0].speaker * 2 + 1)
 
@@ -435,12 +408,7 @@ class VCModule(L.LightningModule):
     # total_model += spd_g_fm + spd_g_pos - spd_g_neg
 
     if train:
-      self.toggle_optimizer(opt_model)
-      opt_model.zero_grad()
-      self.manual_backward(total_model)
-      self.clip_gradients(opt_model, gradient_clip_val=self.grad_clip)
-      opt_model.step()
-      self.untoggle_optimizer(opt_model)
+      step_optimizer(self, opt_model, total_model, self.grad_clip)
 
     if log:
       self.log(f"Charts (Main)/{log}_loss", total_model)
@@ -486,40 +454,16 @@ class VCModule(L.LightningModule):
     # see: https://www.isca-speech.org/archive_v0/VCC_BC_2020/pdfs/VCC2020_paper_34.pdf
 
     if complex_metrics:
-      y_spkemb = P.spkemb(y, 22050)
-      y_v_spkemb = P.spkemb(y_v, 22050)
-      y_c_spkemb = P.spkemb(y_c, 22050)
-      v_spksim = F.cosine_similarity(y_spkemb, y_v_spkemb)
-      c_spksim = F.cosine_similarity(y_spkemb, y_c_spkemb)
-      self.log("Charts (SpkSim)/valid_spksim", v_spksim.mean())
-      self.log("Charts (SpkSim)/vcheat_spksim", c_spksim.mean())
-      self.log("valid_spksim", v_spksim.mean())
-      self.log("vcheat_spksim", c_spksim.mean())
-
-      # inter-speaker
       rotate = lambda x: torch.cat([x[1:], x[:1]], dim=0)
-      inter_batch = [o for o in batch]
-      inter_batch[0] = FeatureEntry4(*[rotate(o) for o in inter_batch[0]])
+      batch_rot = [o for o in batch]
+      batch_rot[0] = FeatureEntry4(*[rotate(o) for o in batch_rot[0]])
+      _, yc_rot, _, _ = self._process_batch(batch_rot, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames)
+      _, yv_rot, _, _ = self._process_batch(batch_rot, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames)
 
-      _, yc2, _, _ = self._process_batch(inter_batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
-      _, yv2, _, _ = self._process_batch(inter_batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
-
-      yv2_spkemb = P.spkemb(yv2, 22050)
-      yc2_spkemb = P.spkemb(yc2, 22050)
-      v2_spksim = F.cosine_similarity(y_spkemb, yv2_spkemb)
-      c2_spksim = F.cosine_similarity(y_spkemb, yc2_spkemb)
-      v2_spksim_leak = F.cosine_similarity(rotate(y_spkemb), yv2_spkemb)
-      c2_spksim_leak = F.cosine_similarity(rotate(y_spkemb), yc2_spkemb)
-      v2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yv2_spkemb))
-      c2_spksim_irrelevent = F.cosine_similarity(y_spkemb, rotate(yc2_spkemb))
-      self.log("Charts (SpkSim)/valid_spksim_vc", v2_spksim.mean())
-      self.log("Charts (SpkSim)/vcheat_spksim_vc", c2_spksim.mean())
-      self.log("Charts (SpkSim)/valid_spksim_leak", v2_spksim_leak.mean())
-      self.log("Charts (SpkSim)/vcheat_spksim_leak", c2_spksim_leak.mean())
-      self.log("Charts (SpkSim)/valid_spksim_base", v2_spksim_irrelevent.mean())
-      self.log("Charts (SpkSim)/vcheat_spksim_base", c2_spksim_irrelevent.mean())
-
-      self.val_outputs.append({"valid_spksim": v_spksim, "vcheat_spksim": c_spksim, "valid_spksim_vc": v2_spksim, "vcheat_spksim_vc": c2_spksim})
+      spksim = log_spksim(self, P, y, y_v, y_c, yv_rot, yc_rot)
+      self.log("valid_spksim", spksim["valid_spksim"].mean())
+      self.log("vcheat_spksim", spksim["vcheat_spksim"].mean())
+      self.val_outputs.append(spksim)
 
     if batch_idx == 0:
       mel_c, y_c, ymel_c, attn_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=True, e2e_frames=None)
@@ -577,19 +521,6 @@ class VCModule(L.LightningModule):
         self.vocoder_msd.load_state_dict(do_data['msd'])
         opt_d.load_state_dict(do_data['optim_d'])
 
-      # 1 epoch = 500 steps として、速度が安定してきた epoch 3 後半あたりの処理速度を雑に測った
-      # with compile:    3.52 it/s
-      # without compile: 3.52 it/s
-      # という結果だったので、モデルだけコンパイルしても学習には大差ないのかもしれない
-
-      # self.vc_model = torch.compile(self.vc_model)
-      # self.vocoder = torch.compile(self.vocoder)
-      # self.vocoder_mpd = torch.compile(self.vocoder_mpd)
-      # self.vocoder_msd = torch.compile(self.vocoder_msd)
-
-      # これは逆に遅くなる & プロファイラで見る限り途中から fused じゃなくなる
-      # self.vocoder = torch.jit.trace(self.vocoder, torch.randn(1, 80, 256, device=self.device))
-
     # TODO: resume 時に step に渡される値がリセットされていそう
     sch_model = S.ChainedScheduler([
         get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
@@ -644,23 +575,6 @@ if __name__ == "__main__":
       }),
       hifi_gan_ckpt=(g_ckpt, do_ckpt),
   )
-
-  # NOTE: pytorch 2.0 では torch._functorch.partitioners._tensor_nbytes が complex64 をサポートしないのでエラーが出る
-  #       https://pytorch.org/functorch/2.0/_modules/torch/_functorch/partitioners.html
-
-  # https://pytorch.org/get-started/pytorch-2.0/
-  # https://pytorch.org/tutorials/intermediate/torch_compile_tutorial.html
-  # https://pytorch.org/docs/stable/dynamo/faq.html
-  # https://pytorch.org/docs/stable/dynamo/troubleshooting.html
-  # https://github.com/pytorch/pytorch/blob/f7608998649d96ace4d2b56dc392ad36177791e2/docs/source/compile/fine_grained_apis.rst
-  # https://grep.app/search?q=torch._dynamo
-
-  # use the latest lagic : なぜかエラーするので、モデル群だけをコンパイルすることにした : see configure_optimizers
-  # model = torch.compile(model)  # -> RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation （なんで...）
-
-  # torch._dynamo.config.verbose = True
-  # from torch._dynamo.utils import CompileProfiler
-  # prof = CompileProfiler()
 
   wandb_logger = new_wandb_logger(PROJECT)
 
