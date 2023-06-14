@@ -67,7 +67,7 @@ def log_attentions(self, names: list[str], attn: Tensor, folder="Attention"):
   plt.close("all")
 
 @torch._dynamo.disable()
-def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
+def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
   step = self.batches_that_stepped()
 
   columns = ["index", "original", "reconstructed"]
@@ -93,10 +93,10 @@ def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tenso
           wandb.Audio(audio_hat_cheat.cpu().to(torch.float32), sample_rate=sr_hat_cheat),
       ])
 
-  self.log_wandb({f"Audio/{step:08d}": wandb.Table(data=data, columns=columns)})
+  self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
 @torch._dynamo.disable()
-def log_audios2(self, P: "Preparation", names: list[str], sr: int, y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None):
+def log_audios2(self, P: "Preparation", names: list[str], sr: int, y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
   step = self.batches_that_stepped()
 
   columns = ["index", "original", "reconstructed"]
@@ -119,7 +119,7 @@ def log_audios2(self, P: "Preparation", names: list[str], sr: int, y: Tensor, y_
           wandb.Audio(y_hat_cheat[i].cpu().to(torch.float32), sample_rate=sr),
       ])
 
-  self.log_wandb({f"Audio/{step:08d}": wandb.Table(data=data, columns=columns)})
+  self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
 # TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
 def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot: Tensor, yc_rot: Tensor, folder="Charts (SpkSim)"):
@@ -141,15 +141,14 @@ def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot
   self.log(f"{folder}/vcheat_spksim", c_spksim.mean())
 
   # speaker-conversion
-  rotate = lambda x: torch.cat([x[1:], x[:1]], dim=0)
   yv2_spkemb = P.spkemb(yv_rot, 22050)
   yc2_spkemb = P.spkemb(yc_rot, 22050)
   v2_spksim = cosine_similarity(y_spkemb, yv2_spkemb)
   c2_spksim = cosine_similarity(y_spkemb, yc2_spkemb)
-  v2_spksim_leak = cosine_similarity(rotate(y_spkemb), yv2_spkemb)
-  c2_spksim_leak = cosine_similarity(rotate(y_spkemb), yc2_spkemb)
-  v2_spksim_irrelevent = cosine_similarity(y_spkemb, rotate(yv2_spkemb))
-  c2_spksim_irrelevent = cosine_similarity(y_spkemb, rotate(yc2_spkemb))
+  v2_spksim_leak = cosine_similarity(rotate_dim0(y_spkemb), yv2_spkemb)
+  c2_spksim_leak = cosine_similarity(rotate_dim0(y_spkemb), yc2_spkemb)
+  v2_spksim_irrelevent = cosine_similarity(y_spkemb, rotate_dim0(yv2_spkemb))
+  c2_spksim_irrelevent = cosine_similarity(y_spkemb, rotate_dim0(yc2_spkemb))
   self.log(f"{folder}/valid_spksim_vc", v2_spksim.mean())
   self.log(f"{folder}/vcheat_spksim_vc", c2_spksim.mean())
   self.log(f"{folder}/valid_spksim_leak", v2_spksim_leak.mean())
@@ -184,10 +183,13 @@ def step_optimizer(self, opt, loss: Tensor, grad_clip=0.0, *, retain_graph=False
 
 def fm_loss(fs1: list[Tensor], fs2: list[Tensor], fn: Callable[[Tensor, Tensor], Tensor]):
   """ Feature Matching Loss """
-  loss = 0.0
+  loss = torch.as_tensor(0.0, device=fs1[0].device)
   for f1, f2 in zip(fs1, fs2):
     loss += fn(f1, f2)
   return loss
 
 def shuffle_dim0(x: Tensor):
   return x[torch.randperm(x.shape[0])]
+
+def rotate_dim0(x: Tensor):
+  return torch.cat([x[1:], x[:1]], dim=0)
