@@ -142,6 +142,7 @@ class VCModel(nn.Module):
     assert seq_len >= src_ref_start + src_ref_len, f"seq_len={seq_len}, src_ref_start={src_ref_start}, src_ref_len={src_ref_len}"
     src_ref_end = src_ref_start + src_ref_len
 
+    # (n_refs*n_batch, seq_len, dim)
     batch_energy = torch.stack([o.energy for o in batch]).flatten(0, 1)
     batch_pitch_i = torch.stack([o.pitch_i for o in batch]).flatten(0, 1)
     # batch_phoneme_i = torch.stack([o.phoneme_i for o in batch]).flatten(0, 1)
@@ -149,6 +150,7 @@ class VCModel(nn.Module):
     batch_w2v2 = torch.stack([o.soft for o in batch]).flatten(0, 1)
     batch_mel = torch.stack([o.mel for o in batch]).flatten(0, 1)
 
+    # (n_refs*n_batch, seq_len, dim)
     batch_energy = self.forward_energy(batch_energy)
     batch_pitch = self.forward_pitch(batch_pitch_i)
     # batch_phoneme = self.forward_phoneme(batch_phoneme_i, batch_phoneme_v)
@@ -179,14 +181,26 @@ class VCModel(nn.Module):
     # shape: (batch, src_len, 80)
     tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
 
+    # 単に rotate すると pitch mismatch のせいで spd_rot loss によりピッチが無視され始めるので、ピッチを適当にでもいいから近づけておく
+    # 雑にピッチ分布の平均だけシフトさせて試してみようと思ったので、ピッチの平均値をはじめに出しておく
+    rot_pitch_i = batch[0].pitch_i[:, :, 0]  # (n_batch, seq_len)
+    rot_pitch_v = batch[0].pitch_v[:, :, 0]  # (n_batch, seq_len)
+    rot_pitch_mask = rot_pitch_v > 0.5
+    rot_pitch_means = (rot_pitch_i * rot_pitch_mask).sum(dim=-1) / rot_pitch_mask.sum(dim=-1)  # (n_batch,)
+
     rotated_mels: list[Tensor] = []
     src_key_rotated = src_key
     src_energy_rotated = src_energy
-    src_pitch_rotated = src_pitch
+    src_pitch_i_rotated = batch[0].pitch_i.to(src_energy)  # (n_batch, seq_len, 1)
+    rot_pitch_means_rotated = rot_pitch_means
     for i in range(n_rotated):
       src_key_rotated = rotate_dim0(src_key_rotated)
       src_energy_rotated = rotate_dim0(src_energy_rotated)
-      src_pitch_rotated = rotate_dim0(src_pitch_rotated)
+      src_pitch_i_rotated = rotate_dim0(src_pitch_i_rotated)
+      rot_pitch_means_rotated = rotate_dim0(rot_pitch_means_rotated)
+      src_pitch_i_rotated_converted = src_pitch_i_rotated + (rot_pitch_means - rot_pitch_means_rotated).unsqueeze(-1).unsqueeze(-1)
+      src_pitch_rotated = self.forward_pitch(src_pitch_i_rotated_converted.clamp(0, 359).to(torch.int64))
+
       tgt_value_rotated, _ = self.lookup(src_key_rotated, ref_key, ref_value, need_weights=False)
       tgt_mel_rotated = self.decode(torch.cat([tgt_value_rotated, src_energy_rotated, src_pitch_rotated], dim=-1))
       rotated_mels.append(tgt_mel_rotated)
@@ -292,15 +306,12 @@ class VCModule(BaseLightningModule):
     spd_loss_fake = aux_loss(spd_fake, batch[0].speaker * 2 + 1)
 
     spd_loss_rot_fake = []
-    speaker_rotated = batch[0].speaker
     for rotated in rotated_mel_hat:
-      speaker_rotated = rotate_dim0(speaker_rotated)
       spd_fake_rot, _ = self.speaker_d(rotated.detach())
-      spd_loss_rot_fake.append(aux_loss(spd_fake_rot, speaker_rotated * 2 + 1))
+      spd_loss_rot_fake.append(aux_loss(spd_fake_rot, batch[0].speaker * 2 + 1))
     spd_loss_rot_fake = torch.mean(torch.stack(spd_loss_rot_fake))
 
-    spd_loss = spd_loss_real + spd_loss_fake
-    spd_loss += spd_loss_rot_fake
+    spd_loss = spd_loss_real * 2 + spd_loss_fake + spd_loss_rot_fake
 
     if train:
       step_optimizer(self, opt_spd, spd_loss, self.grad_clip)
@@ -421,17 +432,23 @@ class VCModule(BaseLightningModule):
 
     spd_g_rot_fm = []
     spd_g_rot_pos = []
-    spd_g_rot_neg = []
+    spd_g_rot_neg1 = []
+    spd_g_rot_neg2 = []
+    spd_g_rot_neg3 = []
     speaker_rotated = batch[0].speaker
     for rotated in rotated_mel_hat:
       speaker_rotated = rotate_dim0(speaker_rotated)
       spd_c_fake_rot, spd_f_fake_rot = self.speaker_d(rotated)
       spd_g_rot_fm.append(fm_loss(spd_f_real, spd_f_fake_rot, F.l1_loss))
-      spd_g_rot_pos.append(aux_loss(spd_c_fake_rot, batch[0].speaker * 2))  # 変換先話者に近づけて
-      spd_g_rot_neg.append(aux_loss(spd_c_fake_rot, speaker_rotated * 2))  # 変換元話者から遠ざける
+      spd_g_rot_pos.append(aux_loss(spd_c_fake_rot, batch[0].speaker * 2))  #      pos: target speaker, real
+      spd_g_rot_neg1.append(aux_loss(spd_c_fake_rot, batch[0].speaker * 2 + 1))  #   1: target speaker, fake
+      spd_g_rot_neg2.append(aux_loss(spd_c_fake_rot, speaker_rotated * 2))  #        2: source speaker, real
+      spd_g_rot_neg3.append(aux_loss(spd_c_fake_rot, speaker_rotated * 2 + 1))  #    3: source speaker, fake
     spd_g_rot_fm = torch.mean(torch.stack(spd_g_rot_fm))
     spd_g_rot_pos = torch.mean(torch.stack(spd_g_rot_pos))
-    spd_g_rot_neg = torch.mean(torch.stack(spd_g_rot_neg))
+    spd_g_rot_neg1 = torch.mean(torch.stack(spd_g_rot_neg1))
+    spd_g_rot_neg2 = torch.mean(torch.stack(spd_g_rot_neg2))
+    spd_g_rot_neg3 = torch.mean(torch.stack(spd_g_rot_neg3))
 
     if log:
       self.log(f"Charts (SPD)/{log}_spd_g_fm", spd_g_fm)
@@ -439,14 +456,23 @@ class VCModule(BaseLightningModule):
       self.log(f"Charts (SPD)/{log}_spd_g_neg", spd_g_neg)
       self.log(f"Charts (SPD)/{log}_spd_g_rot_fm", spd_g_rot_fm)
       self.log(f"Charts (SPD)/{log}_spd_g_rot_pos", spd_g_rot_pos)
-      self.log(f"Charts (SPD)/{log}_spd_g_rot_neg", spd_g_rot_neg)
+      self.log(f"Charts (SPD)/{log}_spd_g_rot_neg_fake", spd_g_rot_neg1)
+      self.log(f"Charts (SPD)/{log}_spd_g_rot_neg_src_real", spd_g_rot_neg2)
+      self.log(f"Charts (SPD)/{log}_spd_g_rot_neg_src_fake", spd_g_rot_neg3)
 
     # generator
 
-    total_model += 0.1 * mi_val
-    total_model += 0.1 + mi_ksp
+    total_model += mi_val
+    total_model += mi_ksp
     total_model += spd_g_fm + spd_g_pos - spd_g_neg
-    total_model += spd_g_rot_pos - spd_g_rot_neg  # 発話内容が全く違うので fm loss は不適切
+
+    if step > ROT_D_STEP:
+      # 一度 spd_g_rot ロスを入れないで学習させたところ、話者性のリークがあるようには聞こえなかった。
+      # いかにも機械音声らしい音声になってたので、ひとまず tgt fake -> tgt real でロスを入れてみることにした。
+      # 追加で neg2, neg3 を入れたらロスの絶対量が大きかったので倍率を下げてみた。
+      # あと、発話内容が全く違うので fm loss は不適切だと思って除いた
+      total_model += spd_g_rot_pos - spd_g_rot_neg1
+      # total_model += -spd_g_rot_neg2 * 0.1 - spd_g_rot_neg3 * 0.1  # TODO: 学習が不安定になるのでひとまず除外した
 
     if train:
       step_optimizer(self, opt_model, total_model, self.grad_clip)
@@ -489,8 +515,8 @@ class VCModule(BaseLightningModule):
     # vcheat: validation with cheating
     complex_metrics = batch_idx < complex_metrics_batches
     e2e = batch_idx == 0 or complex_metrics or step >= self.e2e_milestones[0]
-    _, y_c, _, _, _ = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
-    _, y_v, _, _, _ = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
+    _, y_c, _, _, melrot_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
+    _, y_v, _, _, melrot_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
 
     # MOSNet を入れるとモデルの学習が非常に遅くなる
     # 多分メモリ不足によるものだけど、そこまでするほど MOSNet が正確なのか知らない
@@ -498,10 +524,8 @@ class VCModule(BaseLightningModule):
     # see: https://www.isca-speech.org/archive_v0/VCC_BC_2020/pdfs/VCC2020_paper_34.pdf
 
     if complex_metrics:
-      batch_rot = [o for o in batch]
-      batch_rot[0] = FeatureEntry4(*[rotate_dim0(o) for o in batch_rot[0]])
-      _, yc_rot, _, _, _ = self._process_batch(batch_rot, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames)
-      _, yv_rot, _, _, _ = self._process_batch(batch_rot, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames)
+      yc_rot = self.vocoder_forward(melrot_c[0])
+      yv_rot = self.vocoder_forward(melrot_v[0])
 
       spksim = log_spksim(self, P, y, y_v, y_c, yv_rot, yc_rot)
       self.log("valid_spksim", spksim["valid_spksim"].mean())
@@ -515,6 +539,8 @@ class VCModule(BaseLightningModule):
       log_attentions(self, names, attn_c, "Attention (Cheat)")
       log_attentions(self, names, attn_v, "Attention")
       log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
+      log_spectrograms(self, names, rotate_dim0(mel), melrot_v[0], melrot_c[0], "Spectrogram (Rotated 0)")
+      log_spectrograms(self, names, rotate_dim0(rotate_dim0(mel)), melrot_v[1], melrot_c[1], "Spectrogram (Rotated 1)")
       log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
       log_audios2(self, P, names, 22050, y, y_v, y_c)
       log_audios2(self, P, names, 22050, y, self.vocoder_forward(melrot_v[0]), self.vocoder_forward(melrot_c[0]), folder="Audio (Rotated 0)")
@@ -570,9 +596,9 @@ class VCModule(BaseLightningModule):
     sch_model = S.ChainedScheduler([
         get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
         # S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[0]) / 1000) if step >= self.e2e_milestones[0] else 1.0),
-        S.MultiplicativeLR(opt_model, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0),
+        S.MultiplicativeLR(opt_model, lambda step: 0.3 if step >= self.e2e_milestones[0] else 1.0),
     ])
-    sch_club = S.LambdaLR(opt_club, lambda step: 0.1 if step >= self.e2e_milestones[0] else 1.0)
+    sch_club = S.LambdaLR(opt_club, lambda step: 0.3 if step >= self.e2e_milestones[0] else 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
     sch_spd = S.MultiplicativeLR(opt_spd, lambda step: 1.0)
 
@@ -598,15 +624,16 @@ if __name__ == "__main__":
   g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
   do_ckpt = DATA_DIR / "vocoder" / "do_02500000"
 
+  ROT_D_STEP = 15000
   model = VCModule(
       hdim=512,
-      lr=1e-3,
-      lr_club=1e-3,
-      lr_spd=1e-3,
+      lr=1e-4,
+      lr_club=1e-4,
+      lr_spd=1e-4,
       warmup_steps=500,
       total_steps=total_steps,
-      milestones=(0, 1, 2000, 10000),
-      e2e_milestones=(10000, 12000, 30000),
+      milestones=(0, 1, 4000, 10000),
+      e2e_milestones=(20000, 22000, 30000),
       e2e_frames=64,  # same as JETS https://arxiv.org/pdf/2203.16852.pdf
       grad_clip=1.0,
       hifi_gan=AttrDict({
