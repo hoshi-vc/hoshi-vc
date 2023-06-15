@@ -22,7 +22,8 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 
 import engine.hifi_gan.models as VOC
-from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDomainEntry4)
+from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4,
+                                  IntraDomainEntry4)
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
@@ -31,8 +32,13 @@ from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
-from engine.utils import (DATA_DIR, BaseLightningModule, fm_loss, log_attentions, log_audios, log_audios2, log_spectrograms, log_spksim,
-                          new_checkpoint_callback_wandb, new_wandb_logger, rotate_dim0, setup_train_environment, shuffle_dim0, step_optimizer)
+from engine.utils import (DATA_DIR, BaseLightningModule, fm_loss,
+                          log_attentions, log_audios, log_audios2,
+                          log_spectrograms, log_spksim,
+                          new_checkpoint_callback_wandb, new_wandb_logger,
+                          rotate_dim0, setup_train_environment, shuffle_dim0,
+                          step_optimizer)
+
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -149,6 +155,15 @@ class VCModel(nn.Module):
     # batch_phoneme_v = torch.stack([o.phoneme_v for o in batch]).flatten(0, 1)
     batch_w2v2 = torch.stack([o.soft for o in batch]).flatten(0, 1)
     batch_mel = torch.stack([o.mel for o in batch]).flatten(0, 1)
+
+    # log_audios(
+    #     model,
+    #     P,
+    #     list(range(len(batch_mel))),
+    #     batch_mel.unflatten(0, (n_refs, n_batch)).transpose(0, 1).flatten(0, 1),
+    #     batch_mel.unflatten(0, (n_refs, n_batch)).transpose(0, 1).flatten(0, 1),
+    # )
+    # raise RuntimeError()
 
     # (n_refs*n_batch, seq_len, dim)
     batch_energy = self.forward_energy(batch_energy)
@@ -471,7 +486,8 @@ class VCModule(BaseLightningModule):
       # いかにも機械音声らしい音声になってたので、ひとまず tgt fake -> tgt real でロスを入れてみることにした。
       # 追加で neg2, neg3 を入れたらロスの絶対量が大きかったので倍率を下げてみた。
       # あと、発話内容が全く違うので fm loss は不適切だと思って除いた
-      total_model += spd_g_rot_pos - spd_g_rot_neg1
+      # total_model += spd_g_rot_pos - spd_g_rot_neg1
+      total_model += spd_g_rot_pos
       # total_model += -spd_g_rot_neg2 * 0.1 - spd_g_rot_neg3 * 0.1  # TODO: 学習が不安定になるのでひとまず除外した
 
     if train:
@@ -530,6 +546,8 @@ class VCModule(BaseLightningModule):
       spksim = log_spksim(self, P, y, y_v, y_c, yv_rot, yc_rot)
       self.log("valid_spksim", spksim["valid_spksim"].mean())
       self.log("vcheat_spksim", spksim["vcheat_spksim"].mean())
+      self.log("valid_vc_spksim", spksim["valid_spksim_vc"].mean())
+      self.log("vcheat_vc_spksim", spksim["vcheat_spksim_vc"].mean())
       self.val_outputs.append(spksim)
 
     if batch_idx == 0:
@@ -596,9 +614,9 @@ class VCModule(BaseLightningModule):
     sch_model = S.ChainedScheduler([
         get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
         # S.MultiplicativeLR(opt_model, lambda step: min(1.0, (step - self.e2e_milestones[0]) / 1000) if step >= self.e2e_milestones[0] else 1.0),
-        S.MultiplicativeLR(opt_model, lambda step: 0.3 if step >= self.e2e_milestones[0] else 1.0),
+        S.MultiplicativeLR(opt_model, lambda step: 1.0),
     ])
-    sch_club = S.LambdaLR(opt_club, lambda step: 0.3 if step >= self.e2e_milestones[0] else 1.0)
+    sch_club = S.LambdaLR(opt_club, lambda step: 1.0)
     sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
     sch_spd = S.MultiplicativeLR(opt_spd, lambda step: 1.0)
 
@@ -660,7 +678,7 @@ if __name__ == "__main__":
           new_checkpoint_callback_wandb(
               PROJECT,
               wandb_logger,
-              filename="{step:08d}-{valid_spksim:.4f}-{vcheat_spksim:.4f}",
+              filename="{step:08d}-{valid_spksim:.4f}-{vcheat_spksim:.4f}-{valid_vc_spksim:.4f}-{vcheat_vc_spksim:.4f}",
               monitor="valid_spksim",
               mode="max",
           ),

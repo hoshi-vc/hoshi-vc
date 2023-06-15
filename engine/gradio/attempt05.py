@@ -27,7 +27,7 @@ from engine.utils import DATA_DIR
 
 # TODO: index.reconstruct_batch を使って key を復元したいけど、なぜかうまくいかなかった。
 
-CKPT = DATA_DIR / "attempt05/checkpoints/hopeful-capybara-3/2rmdgxq8/step=00027001-valid_spksim=0.4919-vcheat_spksim=0.5456.ckpt"
+CKPT = DATA_DIR / "attempt05/checkpoints/laced-terrain-5/gbxbd0hv/step=00054001-valid_spksim=0.5586-vcheat_spksim=0.6083.ckpt"
 
 SAVE_DIR = DATA_DIR / "gradio" / CKPT.relative_to(DATA_DIR).with_suffix("")
 MAX_LEN = 100000000000
@@ -179,6 +179,8 @@ Attempt.P = P  # TODO: もっといい方法ない？
 model = Attempt.VCModule.load_from_checkpoint(CKPT, map_location=DEVICE)
 model.eval()
 model.freeze()
+
+#
 
 prepare()
 
