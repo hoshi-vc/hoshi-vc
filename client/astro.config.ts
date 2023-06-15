@@ -3,13 +3,21 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import preact from '@preact/preset-vite'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'astro/config'
 
-// https://vitejs.dev/config/
-export default defineConfig(async () => ({
-  plugins: [preact()],
+import preact from '@astrojs/preact'
+import { presetUno } from 'unocss'
+import unocss from 'unocss/astro'
 
+// https://astro.build/config
+export default defineConfig({
+  integrations: [
+    preact(),
+    unocss({
+      injectReset: true,
+      presets: [presetUno()],
+    }),
+  ],
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   // prevent vite from obscuring rust errors
   clearScreen: false,
@@ -29,4 +37,4 @@ export default defineConfig(async () => ({
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
   },
-}))
+})

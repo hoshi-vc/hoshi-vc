@@ -4,9 +4,10 @@
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { invoke } from '@tauri-apps/api/tauri'
+import { PartyPopperIcon } from 'lucide-preact'
 import { useState } from 'preact/hooks'
 
-function App() {
+export const App = () => {
   const [greetMsg, setGreetMsg] = useState('')
   const [name, setName] = useState('')
 
@@ -17,7 +18,10 @@ function App() {
 
   return (
     <>
-      <h1>Welcome to Tauri!</h1>
+      <h1 class='flex justify-center items-center'>
+        ... and Preact!
+        <PartyPopperIcon size='1em' class='ms-1' />
+      </h1>
 
       <form
         onSubmit={(e) => {
@@ -32,5 +36,3 @@ function App() {
     </>
   )
 }
-
-export default App
