@@ -24,6 +24,7 @@ EXCLUDED = [
     ".husky/",
     "engine/fragment_vc/",
     "engine/hifi_gan/",
+    "notes/tutorial-webserver",
     "LICENSE",
 ]
 
