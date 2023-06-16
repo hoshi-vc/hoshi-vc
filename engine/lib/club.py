@@ -152,8 +152,9 @@ class CLUBSampleForCategorical(nn.Module):
     if ns is not None: assert n_negs == 1, "not implemented"
     for _ in range(n_negs):
       # それぞれの x に対してランダムに一つの y を選ぶ
-      if ns is None: ns = self._sample_negatives(xs, ys)
-      negs.append(-F.cross_entropy(logits, ns, reduction='none'))
+      if ns is None: ns_nth = self._sample_negatives(xs, ys)
+      else: ns_nth = ns
+      negs.append(-F.cross_entropy(logits, ns_nth, reduction='none'))
 
     neg = torch.stack(negs, dim=-1).mean(dim=-1)
 
@@ -165,6 +166,37 @@ class CLUBSampleForCategorical(nn.Module):
 
   def learning_loss(self, xs: Tensor, ys: Tensor):
     return -self.log_likelihood(xs, ys)
+
+class CLUBSampleForCategorical3(CLUBSampleForCategorical):
+  def log_likelihood(self, xs: Tensor, ys: Tensor):
+    logits = self.logvar(xs)
+
+    logits = logits.reshape(-1, logits.shape[-1])
+    ys = ys.reshape(-1)
+
+    return -F.cross_entropy(logits, ys)
+
+  def forward(self, xs: Tensor, ys: Tensor, ns: Optional[Tensor] = None, n_negs=1):
+    logits = self.logvar(xs)
+
+    logits = logits.reshape(-1, logits.shape[-1])
+    xs = xs.reshape(-1, xs.shape[-1])
+    ys = ys.reshape(-1)
+    if ns is not None: ns = ns.reshape(-1)
+
+    pos = -F.cross_entropy(logits, ys, reduction='none')
+    negs = []
+
+    if ns is not None: assert n_negs == 1, "not implemented"
+    for _ in range(n_negs):
+      # それぞれの x に対してランダムに一つの y を選ぶ
+      if ns is None: ns_nth = self._sample_negatives(xs, ys)
+      else: ns_nth = ns
+      negs.append(-F.cross_entropy(logits, ns_nth, reduction='none'))
+
+    neg = torch.stack(negs, dim=-1).mean(dim=-1)
+
+    return (pos - neg).mean()
 
 class CLUBSampleForCategorical2(CLUBSampleForCategorical):
   """ 多分、全てのカテゴリが同じ割合で出現するときだけちゃんと機能する """
