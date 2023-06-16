@@ -5,6 +5,9 @@
   },
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[dockerfile]": {
+    "editor.defaultFormatter": "ms-azuretools.vscode-docker"
+  },
   "[ignore]": {
     "editor.defaultFormatter": "foxundermoon.shell-format"
   },
@@ -32,5 +35,14 @@
     "**/Thumbs.db": true,
     // additional settings
     "**/__pycache__": true
+  },
+  "files.watcherExclude": {
+    // default settings
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/*/**": true,
+    "**/.hg/store/**": true,
+    // additional settings
+    "data": true
   }
 }

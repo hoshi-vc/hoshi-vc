@@ -1,8 +1,8 @@
 build_isolation = true
 
-[python]
-use_venv = true
+# [python]
+# use_venv = true
 
-[venv]
-backend = "venv"
-in_project = true
+# [venv]
+# backend = "venv"
+# in_project = true

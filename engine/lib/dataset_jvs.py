@@ -58,7 +58,7 @@ class JVS(Dataset[JVSEntry]):
       raise RuntimeError(f"The path {data_dir} doesn't exist. "
                          "Please check the ``root`` path or set `download=True` to download it")
 
-    self._path = path.join(data_dir, "jvs_ver1")
+    self._path = str(Path(path.join(data_dir, "jvs_ver1")).resolve())
 
     files = sorted(str(p.relative_to(self._path)) for p in Path(self._path).glob("*/*/wav24kHz16bit/*.wav"))
     files = [Path(p) for p in files]

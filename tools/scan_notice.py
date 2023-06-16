@@ -19,7 +19,7 @@ NOTICE = [
     "If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.",
 ]
 
-EXCLUDED = [
+EXCLUDED_PREFIX = [
     ".git/",
     ".husky/",
     "engine/fragment_vc/",
@@ -27,7 +27,7 @@ EXCLUDED = [
     "LICENSE",
 ]
 
-EXCLUDED_EXT = [
+EXCLUDED_SUFFIX = [
     ".editorconfig",
     ".gitattributes",
     ".gitignore",
@@ -41,6 +41,7 @@ EXCLUDED_EXT = [
     ".tool-versions",
     ".txt",
     ".yaml",
+    "Dockerfile",
 ]
 
 if not (ROOT / "LICENSE").is_file():
@@ -61,8 +62,8 @@ else:
 for file in files:
   file = str((ROOT / file).relative_to(ROOT))
 
-  if any([file.startswith(excluded) for excluded in EXCLUDED]): continue
-  if any([file.endswith(ext) for ext in EXCLUDED_EXT]): continue
+  if any([file.startswith(excluded) for excluded in EXCLUDED_PREFIX]): continue
+  if any([file.endswith(ext) for ext in EXCLUDED_SUFFIX]): continue
 
   contents = (ROOT / file).read_text()
   if all([line in contents for line in NOTICE]): continue

@@ -7,9 +7,12 @@
 /tasks/current/
 /tasks/done/
 
+*.tar.gz
+
 # auto generated
 __pycache__/
 .ipynb_checkpoints/
+.pnpm-store/
 .venv/
 dist/
 dist-ssr/
