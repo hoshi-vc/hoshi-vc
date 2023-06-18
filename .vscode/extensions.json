@@ -1,7 +1,6 @@
 {
   "recommendations": [
     "antfu.unocss",
-    "astro-build.astro-vscode",
     "editorconfig.editorconfig",
     "esbenp.prettier-vscode",
     "ms-python.python",

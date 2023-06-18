@@ -37,5 +37,6 @@
     "**/__pycache__": true
   },
   // see: https://github.com/prettier/prettier-vscode/issues/3000#issuecomment-1547290873
-  "prettier.prettierPath": "./node_modules/prettier"
+  "prettier.prettierPath": "./node_modules/prettier",
+  "unocss.root": ["client"]
 }
