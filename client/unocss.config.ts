@@ -4,11 +4,18 @@
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { defineConfig, presetUno } from 'unocss'
+import * as mini from 'unocss/preset-mini'
 
 export default defineConfig({
   presets: [presetUno()],
   theme: {
-    // ref: https://ui.shadcn.com/docs/installation
+    // custom config
+    fontFamily: {
+      sans: "'Roboto Flex Variable'," + mini.theme.fontFamily.sans,
+      mono: "'Inconsolata Variable'," + mini.theme.fontFamily.mono,
+    },
+
+    // config for shadcn : https://ui.shadcn.com/docs/installation
     container: {
       center: true,
       padding: '2rem',
@@ -72,5 +79,8 @@ export default defineConfig({
         'accordion-up': 'ease-out',
       },
     },
+  },
+  shortcuts: {
+    'style-body': 'bg-background text-foreground font-sans font-400',
   },
 }) as unknown

@@ -6,6 +6,8 @@
 import '@unocss/reset/tailwind.css'
 
 import '@/global.css'
+import '@fontsource-variable/inconsolata'
+import '@fontsource-variable/roboto-flex'
 
 import 'virtual:uno.css'
 

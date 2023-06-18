@@ -11,6 +11,8 @@
     "shadcn": "shadcn-ui"
   },
   "dependencies": {
+    "@fontsource-variable/inconsolata": "^5.0.3",
+    "@fontsource-variable/roboto-flex": "^5.0.3",
     "@radix-ui/react-checkbox": "^1.0.4",
     "@radix-ui/react-dialog": "^1.0.4",
     "@radix-ui/react-popover": "^1.0.6",
