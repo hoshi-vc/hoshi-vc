@@ -1,12 +1,13 @@
 {
-  "extends": "astro/tsconfigs/strict",
+  "extends": "astro/tsconfigs/strictest",
   "compilerOptions": {
+    "allowJs": false,
+    "checkJs": false,
     "baseUrl": ".",
     "paths": {
       "~/*": ["src/*"]
     },
-    "jsx": "preserve",
-    "jsxImportSource": "preact"
+    "jsx": "react-jsx"
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

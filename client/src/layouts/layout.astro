@@ -4,6 +4,8 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import '~/global.css'
+
 export interface Props {
   title: string
 }
@@ -21,22 +23,5 @@ const { title } = Astro.props
   </head>
   <body>
     <slot />
-    <style is:global>
-      :root {
-        font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-        font-size: 16px;
-        line-height: 24px;
-        font-weight: 400;
-
-        color: #0f0f0f;
-        background-color: #f6f6f6;
-
-        font-synthesis: none;
-        text-rendering: optimizeLegibility;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        -webkit-text-size-adjust: 100%;
-      }
-    </style>
   </body>
 </html>

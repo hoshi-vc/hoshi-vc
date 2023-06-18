@@ -4,5 +4,5 @@
     "composite": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["astro.config.ts", "uno.config.ts"]
+  "include": ["astro.config.ts", "unocss.config.ts"]
 }

@@ -5,19 +5,18 @@
 
 import { defineConfig } from 'astro/config'
 
-import preact from '@astrojs/preact'
-import { presetUno } from 'unocss'
+import react from '@astrojs/react'
 import unocss from 'unocss/astro'
 
 // https://astro.build/config
 export default defineConfig({
   integrations: [
-    preact(),
+    react(),
     unocss({
       injectReset: true,
-      presets: [presetUno()],
     }),
   ],
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   // prevent vite from obscuring rust errors
   clearScreen: false,
@@ -31,10 +30,20 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     // Tauri supports es2021
-    target: process.env.TAURI_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
+    target: process.env['TAURI_PLATFORM'] == 'windows' ? 'chrome105' : 'safari13',
     // don't minify for debug builds
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    minify: !process.env['TAURI_DEBUG'] ? 'esbuild' : false,
     // produce sourcemaps for debug builds
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: !!process.env['TAURI_DEBUG'],
+  },
+
+  // Vite options not supported by astro natively. (values are same as above)
+  vite: {
+    server: {
+      strictPort: true,
+    },
+    build: {
+      target: process.env['TAURI_PLATFORM'] == 'windows' ? 'chrome105' : 'safari13',
+    },
   },
 })

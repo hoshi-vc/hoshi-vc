@@ -4,8 +4,10 @@
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { invoke } from '@tauri-apps/api/tauri'
-import { PartyPopperIcon } from 'lucide-preact'
-import { useState } from 'preact/hooks'
+import { PartyPopperIcon } from 'lucide-react'
+import { useState } from 'react'
+import { Button } from '~/components/ui/button'
+import { Input } from '~/components/ui/input'
 
 export const App = () => {
   const [greetMsg, setGreetMsg] = useState('')
@@ -18,18 +20,19 @@ export const App = () => {
 
   return (
     <>
-      <h1 class='flex justify-center items-center'>
-        ... and Preact!
-        <PartyPopperIcon size='1em' class='ms-1' />
+      <h1 className='flex justify-center items-center'>
+        ... and React!
+        <PartyPopperIcon size='1em' className='ms-1' />
       </h1>
 
       <form
+        className='flex w-full max-w-sm mx-auto items-center space-x-2'
         onSubmit={(e) => {
           e.preventDefault()
           greet()
         }}>
-        <input onChange={(e) => setName(e.currentTarget.value)} placeholder='Enter a name...' />
-        <button type='submit'>Greet</button>
+        <Input onChange={(e) => setName(e.currentTarget.value)} placeholder='Enter a name...' />
+        <Button type='submit'>Greet</Button>
       </form>
 
       <p>{greetMsg}</p>

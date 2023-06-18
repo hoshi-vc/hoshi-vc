@@ -22,6 +22,7 @@ NOTICE = [
 EXCLUDED = [
     ".git/",
     ".husky/",
+    "client/src/components/ui/",
     "engine/fragment_vc/",
     "engine/hifi_gan/",
     "notes/tutorial-webserver",
