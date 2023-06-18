@@ -3,6 +3,8 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 // If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { invoke } from '@tauri-apps/api/tauri'
 import { PartyPopperIcon } from 'lucide-react'
 import { useState } from 'react'
@@ -24,12 +26,13 @@ export const App = () => {
       </h1>
 
       <form
+        className='flex w-full max-w-sm mx-auto items-center space-x-2'
         onSubmit={(e) => {
           e.preventDefault()
           greet()
         }}>
-        <input onChange={(e) => setName(e.currentTarget.value)} placeholder='Enter a name...' />
-        <button type='submit'>Greet</button>
+        <Input onChange={(e) => setName(e.currentTarget.value)} placeholder='Enter a name...' />
+        <Button type='submit'>Greet</Button>
       </form>
 
       <p>{greetMsg}</p>

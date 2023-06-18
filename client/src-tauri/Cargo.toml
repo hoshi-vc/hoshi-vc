@@ -1,5 +1,5 @@
 [package]
-name = "hoshi-vc-client"
+name = "hoshi-vc"
 version = "0.0.0"
 edition = "2021"
 
