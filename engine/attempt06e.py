@@ -76,6 +76,30 @@ class VCModel(nn.Module):
 
     self.lookup = nn.MultiheadAttention(kv_dim, 4, dropout=0.2, batch_first=True)
 
+    self.joint = nn.Sequential(
+        nn.Linear(kv_dim + energy_dim + pitch_dim, hdim),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        Transpose(1, 2),
+        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        Transpose(1, 2),
+        nn.ReLU(),
+        nn.LayerNorm(kv_dim),
+    )
+
+    self.encode_value2 = nn.Sequential(
+        nn.Linear(energy_dim + mel_dim, hdim),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        Transpose(1, 2),
+        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        Transpose(1, 2),
+        nn.ReLU(),
+        nn.LayerNorm(kv_dim),
+    )
+
+    self.lookup2 = nn.MultiheadAttention(kv_dim, 4, dropout=0.2, batch_first=True)
+
     self.decode = nn.Sequential(
         nn.Linear(kv_dim + energy_dim + pitch_dim, hdim),
         PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
@@ -99,6 +123,9 @@ class VCModel(nn.Module):
 
   def forward_value(self, energy: Tensor, pitch: Tensor, mel: Tensor):
     return self.encode_value(torch.cat([energy, mel], dim=-1))
+
+  def forward_value2(self, energy: Tensor, pitch: Tensor, mel: Tensor):
+    return self.encode_value2(torch.cat([energy, mel], dim=-1))
 
   def forward(self, batch: IntraDomainEntry4, src_ref_start: int, src_ref_len: int, n_rotated=0):
     # key: 似たような発音ほど近い表現になってほしい
@@ -128,12 +155,14 @@ class VCModel(nn.Module):
     batch_mel = self.forward_mel(batch_mel)
     batch_key = self.forward_key(batch_energy, batch_pitch, batch_w2v2)
     batch_value = self.forward_value(batch_energy, batch_pitch, batch_mel)
+    batch_value2 = self.forward_value2(batch_energy, batch_pitch, batch_mel)
 
     # (n_refs, n_batch, seq_len, feat_dim)
     batch_energy = batch_energy.unflatten(0, (n_refs, n_batch))
     batch_pitch = batch_pitch.unflatten(0, (n_refs, n_batch))
     batch_key = batch_key.unflatten(0, (n_refs, n_batch))
     batch_value = batch_value.unflatten(0, (n_refs, n_batch))
+    batch_value2 = batch_value2.unflatten(0, (n_refs, n_batch))
     batch_pitch_i = batch_pitch_i.unflatten(0, (n_refs, n_batch))
 
     # (batch, len, feat_dim)
@@ -142,11 +171,14 @@ class VCModel(nn.Module):
     src_pitch = batch_pitch[0]
     ref_key = torch.cat([batch_key[0, :, src_ref_start:src_ref_end], batch_key[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
     ref_value = torch.cat([batch_value[0, :, src_ref_start:src_ref_end], batch_value[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+    ref_value2 = torch.cat([batch_value2[0, :, src_ref_start:src_ref_end], batch_value2[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
     ref_pitch_i = torch.cat([batch_pitch_i[0, :, src_ref_start:src_ref_end], batch_pitch_i[1:].transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
 
     assert ref_key.shape[1] == seq_len * (n_refs - 1), f"ref_key.shape={ref_key.shape}, seq_len={seq_len}, n_refs={n_refs}"
 
-    tgt_value, attn = self.lookup(src_key, ref_key, ref_value, need_weights=True)
+    o, attn = self.lookup(src_key, ref_key, ref_value, need_weights=True)
+    o = self.joint(torch.cat([o, src_energy, src_pitch], dim=-1))
+    tgt_value, attn = self.lookup2(o, ref_key, ref_value2, need_weights=True)
 
     # shape: (batch, src_len, 80)
     tgt_mel = self.decode(torch.cat([tgt_value, src_energy, src_pitch], dim=-1))
@@ -171,7 +203,9 @@ class VCModel(nn.Module):
       src_pitch_i_rotated_converted = src_pitch_i_rotated + (rot_pitch_means - rot_pitch_means_rotated).unsqueeze(-1).unsqueeze(-1)
       src_pitch_rotated = self.forward_pitch(src_pitch_i_rotated_converted.clamp(0, 359).to(torch.int64))
 
-      tgt_value_rotated, _ = self.lookup(src_key_rotated, ref_key, ref_value, need_weights=False)
+      o, _ = self.lookup(src_key_rotated, ref_key, ref_value, need_weights=False)
+      o = self.joint(torch.cat([o, src_energy_rotated, src_pitch_rotated], dim=-1))
+      tgt_value_rotated, _ = self.lookup2(o, ref_key, ref_value2, need_weights=False)
       tgt_mel_rotated = self.decode(torch.cat([tgt_value_rotated, src_energy_rotated, src_pitch_rotated], dim=-1))
       rotated_mels.append(tgt_mel_rotated)
 
@@ -218,14 +252,17 @@ class VCModule(BaseLightningModule):
     # https://lightning.ai/docs/pytorch/stable/notebooks/lightning_examples/basic-gan.html
     self.automatic_optimization = False
 
-  def _process_batch(self,
-                     batch: IntraDomainEntry4,
-                     self_ratio: float,
-                     step: int,
-                     e2e: bool,
-                     e2e_frames: Optional[int],
-                     train=False,
-                     log: Optional[str] = None):
+  def _process_batch(
+      self,
+      batch: IntraDomainEntry4,
+      self_ratio: float,
+      step: int,
+      e2e: bool,
+      e2e_frames: Optional[int],
+      train=False,
+      log: Optional[str] = None,
+      with_rot=False,
+  ):
     opt_model, opt_club = self.optimizers()
 
     # NOTE: step 0 ではバグ確認のためすべてのロスを使って backward する。
@@ -241,7 +278,7 @@ class VCModule(BaseLightningModule):
     seq_len = mel.shape[1]
     src_ref_len = int(self_ratio * seq_len)
     src_ref_start = self.batch_rand.randint(0, seq_len - src_ref_len)
-    mel_hat, (ref_key, ref_value, ref_pitch_i, vc_attn), rotated_mel_hat = self.vc_model(batch, src_ref_start, src_ref_len, n_rotated=4)
+    mel_hat, (ref_key, ref_value, ref_pitch_i, vc_attn), rotated_mel_hat = self.vc_model(batch, src_ref_start, src_ref_len, n_rotated=4 if with_rot else 0)
 
     vc_reconst = F.l1_loss(mel_hat, mel)
 
@@ -350,8 +387,9 @@ class VCModule(BaseLightningModule):
     # vcheat: validation with cheating
     complex_metrics = batch_idx < complex_metrics_batches
     e2e = batch_idx == 0 or complex_metrics
-    _, y_c, _, _, melrot_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
-    _, y_v, _, _, melrot_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
+    with_rot = batch_idx == 0 or complex_metrics
+    _, y_c, _, _, melrot_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat", with_rot=with_rot)
+    _, y_v, _, _, melrot_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid", with_rot=with_rot)
 
     # MOSNet を入れるとモデルの学習が非常に遅くなる
     # 多分メモリ不足によるものだけど、そこまでするほど MOSNet が正確なのか知らない
@@ -370,8 +408,8 @@ class VCModule(BaseLightningModule):
       self.val_outputs.append(spksim)
 
     if batch_idx == 0:
-      mel_c, y_c, ymel_c, attn_c, melrot_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=True, e2e_frames=None)
-      mel_v, y_v, ymel_v, attn_v, melrot_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=True, e2e_frames=None)
+      mel_c, y_c, ymel_c, attn_c, melrot_c = self._process_batch(batch, self_ratio=1.0, step=step, e2e=True, e2e_frames=None, with_rot=True)
+      mel_v, y_v, ymel_v, attn_v, melrot_v = self._process_batch(batch, self_ratio=0.0, step=step, e2e=True, e2e_frames=None, with_rot=True)
       names = [f"{i:02d}" for i in range(len(mel))]
       log_attentions(self, names, attn_c, "Attention (Cheat)")
       log_attentions(self, names, attn_v, "Attention")
@@ -485,10 +523,9 @@ if __name__ == "__main__":
       ],
       accelerator="gpu",
       precision="16-mixed",
-      benchmark=True,
+      # benchmark=True,
       # detect_anomaly=True,
-      # deterministic=True,
-      # detect_anomaly=True,
+      deterministic=True,
       # profiler=profilers.PyTorchProfiler(
       #     DATA_DIR / "profiler",
       #     schedule=torch.profiler.schedule(wait=0, warmup=30, active=6, repeat=1),
