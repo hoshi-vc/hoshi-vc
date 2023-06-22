@@ -27,7 +27,7 @@ def plot_specgram(audio: Tensor | NPArray, sr: int, title="Spectrogram", xlim=No
   plt.show(block=False)
 
 def plot_spectrogram(specgram: Tensor, title=None, ylabel="freq_bin", *, factor=1.0):
-  specgram = specgram.cpu()
+  if isinstance(specgram, Tensor): specgram = specgram.cpu().numpy()
 
   fig, axs = plt.subplots(1, 1)
   fig.set_size_inches(10 * factor, 3 * factor)

@@ -68,6 +68,7 @@ RUN curl -L "https://github.com/coder/code-server/releases/download/v4.13.0/code
 ADD vocoder.tar /root/data/
 ADD datasets.tar /root/data/
 ADD feats.tar /root/data/
+ADD attempt07-stage1.tar /root/data/
 
 EXPOSE 8888 6006
 

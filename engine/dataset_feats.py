@@ -102,7 +102,7 @@ class IntraDomainDataset(Dataset):
     entries.append(self.load_entry(d, speaker_id, start + offset, self.frames))
     for i in other_indices:
       if i == index: continue
-      if len(entries) == self.n_samples + 1: break
+      if len(entries) == self.n_samples + 1: break  # n_samples 個の ref & 1 個の src
       d, sid2, start = self.starts[i]
       assert speaker_id == sid2  # 今後は same_speaker_lut が壊れてたらここでエラーになるはず
       entries.append(self.load_entry(d, speaker_id, start + offset, self.frames))

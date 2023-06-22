@@ -121,6 +121,42 @@ def log_audios2(self, P: "Preparation", names: list[str], sr: int, y: Tensor, y_
 
   self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
+@torch._dynamo.disable()
+def log_audios3(self,
+                P: "Preparation",
+                names: list[str],
+                sr: int,
+                y: Tensor,
+                y_aug: Tensor,
+                y_hat: Tensor,
+                y_hat_cheat: Optional[Tensor] = None,
+                folder="Audio"):
+  step = self.batches_that_stepped()
+
+  columns = ["index", "original", "augmented", "reconstructed"]
+  if y_hat_cheat is not None:
+    columns.append("reconstructed_cheat")
+
+  data = []
+  for i, name in enumerate(names):
+    if y_hat_cheat is None:
+      data.append([
+          name,
+          wandb.Audio(y[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_aug[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat[i].cpu().to(torch.float32), sample_rate=sr),
+      ])
+    else:
+      data.append([
+          name,
+          wandb.Audio(y[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_aug[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat[i].cpu().to(torch.float32), sample_rate=sr),
+          wandb.Audio(y_hat_cheat[i].cpu().to(torch.float32), sample_rate=sr),
+      ])
+
+  self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
+
 # TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
 def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot: Tensor, yc_rot: Tensor, folder="Charts (SpkSim)"):
   """

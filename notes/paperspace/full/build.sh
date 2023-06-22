@@ -10,14 +10,17 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ROOT="$(dirname "$(dirname "$(dirname "$DIR")")")"
 
-# echo "Collecting data/datasets..."
+echo "Collecting data/datasets..."
 tar -cf - -C "$ROOT/data" datasets | pv >"$DIR/datasets.tar"
 
-# echo "Collecting data/feats..."
+echo "Collecting data/feats..."
 tar -cf - -C "$ROOT/data" feats | pv >"$DIR/feats.tar"
 
-# echo "Collecting data/vocoder..."
+echo "Collecting data/vocoder..."
 tar -cf - -C "$ROOT/data" vocoder | pv >"$DIR/vocoder.tar"
+
+echo "Collecting data/attempt07-stage1..."
+tar -cf - -C "$ROOT/data" attempt07-stage1 | pv >"$DIR/attempt07-stage1.tar"
 
 echo "Building docker image..."
 docker image build -t hoshivc/trainer:full "$DIR"
@@ -29,3 +32,4 @@ echo "Cleaning up..."
 rm "$DIR/datasets.tar"
 rm "$DIR/feats.tar"
 rm "$DIR/vocoder.tar"
+rm "$DIR/attempt07-stage1.tar"
