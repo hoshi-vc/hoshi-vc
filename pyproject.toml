@@ -32,6 +32,7 @@ dependencies = [
     "tqdm~=4.65",
     "transformers~=4.29",
     "wandb~=0.15",
+    "pyworld>=0.3.3",
 ]
 
 [tool.pdm.dev-dependencies]

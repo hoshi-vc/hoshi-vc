@@ -51,7 +51,7 @@ class Preparation:
     device = self.device
     if trim: audio = trim_silence(audio, sr)
     if len(audio) == 0: return audio
-    if normalize: audio = torch.as_tensor(librosa.util.normalize(audio.numpy()), device=device) * 0.95
+    if normalize: audio = torch.as_tensor(librosa.util.normalize(audio.cpu().numpy()), device=device) * 0.95
     return audio
 
   @cached_property

@@ -199,6 +199,32 @@ def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot
       "vcheat_spksim_vc": c2_spksim,
   }
 
+# TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
+def log_spksim1(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, folder="Charts (SpkSim)"):
+  y_spkemb = P.spkemb(y, 22050)
+  y_v_spkemb = P.spkemb(yv, 22050)
+  y_c_spkemb = P.spkemb(yc, 22050)
+  v_spksim = cosine_similarity(y_spkemb, y_v_spkemb)
+  c_spksim = cosine_similarity(y_spkemb, y_c_spkemb)
+  self.log(f"{folder}/valid_spksim", v_spksim.mean())
+  self.log(f"{folder}/vcheat_spksim", c_spksim.mean())
+
+  return {
+      "valid_spksim": v_spksim,
+      "vcheat_spksim": c_spksim,
+  }
+
+# TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
+def log_spksim0(self, P: "Preparation", y: Tensor, yv: Tensor, folder="Charts (SpkSim)"):
+  y_spkemb = P.spkemb(y, 22050)
+  y_v_spkemb = P.spkemb(yv, 22050)
+  v_spksim = cosine_similarity(y_spkemb, y_v_spkemb)
+  self.log(f"{folder}/valid_spksim", v_spksim.mean())
+
+  return {
+      "valid_spksim": v_spksim,
+  }
+
 class BaseLightningModule(L.LightningModule):
   def batches_that_stepped(self):
     # https://github.com/Lightning-AI/lightning/issues/13752
@@ -217,6 +243,14 @@ def step_optimizer(self, opt, loss: Tensor, grad_clip=0.0, *, retain_graph=False
   opt.step()
   self.untoggle_optimizer(opt)
 
+def step_optimizers(self, opts, loss: Tensor, grad_clip=0.0, *, retain_graph=False):
+  for opt in opts:
+    opt.zero_grad()
+  self.manual_backward(loss, retain_graph=retain_graph)
+  for opt in opts:
+    self.clip_gradients(opt, gradient_clip_val=grad_clip)
+    opt.step()
+
 def fm_loss(fs1: list[Tensor], fs2: list[Tensor], fn: Callable[[Tensor, Tensor], Tensor]):
   """ Feature Matching Loss """
   loss = torch.as_tensor(0.0, device=fs1[0].device)
@@ -229,3 +263,31 @@ def shuffle_dim0(x: Tensor):
 
 def rotate_dim0(x: Tensor):
   return torch.cat([x[1:], x[:1]], dim=0)
+
+class LinearSchedule:
+  def __init__(self, pos: list[tuple[int, float]]):
+    self.pos = pos
+    self.pos.sort(key=lambda x: x[0])
+
+  def __call__(self, step: int):
+    for i, (s, v) in enumerate(self.pos):
+      if step < s:
+        if i == 0: return v
+        s0, v0 = self.pos[i - 1]
+        if s == s0: return v
+        return v0 + (v - v0) * (step - s0) / (s - s0)
+    return self.pos[-1][1]
+
+class BinarySchedule:
+  def __init__(self, pos: list[tuple[int, bool]]):
+    self.pos = pos
+    self.pos.sort(key=lambda x: x[0])
+
+  def __call__(self, step: int):
+    for i, (s, v) in enumerate(self.pos):
+      if step < s:
+        if i == 0: return v
+        s0, v0 = self.pos[i - 1]
+        if s == s0: return v
+        return v0
+    return self.pos[-1][1]

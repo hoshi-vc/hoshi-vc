@@ -86,6 +86,9 @@ def np_safesave(file: str | Path, arr: NPArray, order_c: bool = True):
 def clamp(x: float, mn: float, mx: float) -> float:
   return max(min(x, mx), mn)
 
+def mix(x: float, y: float, ratio_x: float) -> float:
+  return x * ratio_x + y * (1 - ratio_x)
+
 def save_ckpt(path: Path | str, data: dict = {}, **kwargs):
   path = str(path)
   make_parents(path)
