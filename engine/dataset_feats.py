@@ -93,7 +93,7 @@ class IntraDomainDataset(Dataset):
   def __getitem__(self, index: int) -> IntraDomainEntry:
     d, speaker_id, start = self.starts[index]
     offset = 0
-    if self.random_offset: self.random.randint(0, self.start_hop)
+    if self.random_offset: offset += self.random.randint(0, self.start_hop)
 
     other_indices = self.same_speaker_lut[speaker_id]
     other_indices = self.random2.sample(other_indices, self.n_samples + 1)
