@@ -22,8 +22,7 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 
 import engine.hifi_gan.models as VOC
-from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4,
-                                  IntraDomainEntry4)
+from engine.dataset_feats import (FeatureEntry4, IntraDomainDataModule4, IntraDomainEntry4)
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
@@ -32,13 +31,8 @@ from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import AttrDict, clamp, hide_warns
 from engine.prepare import Preparation
-from engine.utils import (DATA_DIR, BaseLightningModule, fm_loss,
-                          log_attentions, log_audios, log_audios2,
-                          log_spectrograms, log_spksim,
-                          new_checkpoint_callback_wandb, new_wandb_logger,
-                          rotate_dim0, setup_train_environment, shuffle_dim0,
-                          step_optimizer)
-
+from engine.utils import (DATA_DIR, BaseLightningModule, fm_loss, log_attentions, log_audios, log_audios2, log_spectrograms, log_spksim,
+                          new_checkpoint_callback_wandb, new_wandb_logger, rotate_dim0, setup_train_environment, shuffle_dim0, step_optimizer)
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):

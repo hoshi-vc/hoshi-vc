@@ -1,4 +1,4 @@
-Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hoshi-vc/blob/main/README.md?_x_tr_sl=en&_x_tr_tl=ja&_x_tr_hl=en&_x_tr_pto=wapp) if necessary.<br>
+Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hoshi-vc?_x_tr_sl=en&_x_tr_tl=ja&_x_tr_hl=en&_x_tr_pto=wapp) if necessary.<br>
 でも、[日本語版ならここに](README_JA.md)あります。
 
 <!-- Note: Translations are welcome. -->
@@ -13,7 +13,7 @@ Please [use machine translation](https://github-com.translate.goog/hoshi-vc/hosh
 
 ## Getting Started with Development
 
-It is intended for development on Linux and WSL2.
+It is intended for development on Linux or WSL2.
 
 ```bash
 # Install `asdf` and `pnpm` before you start if you haven't already.
@@ -38,9 +38,7 @@ Note: The `requirements.txt` is kept up to date, so you can use that.
 
 ## Progress
 
-This project is currently under active development.
-
-Please note that the source code is updated constantly.
+This project is currently under active development. Please note that the source code is updated constantly.
 
 Feel free to star this repo if you are interested in updates.
 

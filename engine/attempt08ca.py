@@ -34,6 +34,7 @@ from engine.attempt08_dataset import DataModule08, Entry08
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
+from engine.lib.attention import MultiHeadAttention
 from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
 from engine.lib.fastspeech import FFNBlock, PosFFT
 from engine.lib.layers import Buckets, Transpose
@@ -54,7 +55,8 @@ class VCModel(nn.Module):
     mel_dim = hdim // 2
     kv_dim = hdim // 2
 
-    self.kv_dim = kv_dim
+    self.kdim = kdim = 32
+    self.vdim = vdim = hdim
 
     self.energy_bins = Buckets(-11.0, -3.0, 128)
     self.energy_embed = nn.Embedding(128, energy_dim)
@@ -65,10 +67,13 @@ class VCModel(nn.Module):
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
-        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),
         nn.ReLU(),
-        nn.LayerNorm(kv_dim),
+        nn.LayerNorm(hdim),
+        nn.Linear(hdim, kdim),
+        nn.ReLU(),
+        nn.LayerNorm(kdim),
     )
 
     self.mel_encode = nn.Linear(80, mel_dim)
@@ -77,22 +82,30 @@ class VCModel(nn.Module):
         nn.ReLU(),
         nn.LayerNorm(hdim),
         Transpose(1, 2),
-        nn.Conv1d(hdim, kv_dim, kernel_size=3, padding=1),
+        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
         Transpose(1, 2),
         nn.ReLU(),
-        nn.LayerNorm(kv_dim),
+        nn.LayerNorm(hdim),
+        nn.Linear(hdim, vdim),
+        nn.ReLU(),
+        nn.LayerNorm(vdim),
     )
 
-    self.lookup = nn.MultiheadAttention(kv_dim, 16, dropout=0.2, batch_first=True)
+    self.lookup = MultiHeadAttention(kdim, vdim, 1, dropout=0.2, hard=True)
 
     self.decode = nn.Sequential(
-        nn.Linear(kv_dim + energy_dim + pitch_dim, hdim),
-        # Transpose(1, 2),
-        # nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        # Transpose(1, 2),
-        # nn.ReLU(),
-        # nn.LayerNorm(hdim),
-        PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
+        nn.Linear(vdim + energy_dim + pitch_dim, hdim),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        Transpose(1, 2),
+        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+        Transpose(1, 2),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        nn.Linear(hdim, hdim),
+        nn.ReLU(),
+        nn.LayerNorm(hdim),
+        # PosFFT(hdim, layers=2, heads=2, hdim=256, kernels=(3, 3), dropout=0.2, posenc_len=2048),
         nn.Linear(hdim, 80),
     )
 
@@ -192,18 +205,18 @@ class VCModule(BaseLightningModule):
     self.vocoder = VOC.Generator(hifi_gan)
 
     self.club_val = CLUBSampleForCategorical(
-        xdim=self.vc_model.kv_dim,
+        xdim=self.vc_model.vdim,
         ynum=360,
         hdim=hdim,
         fast_sampling=True,
     )
     self.club_key = CLUBSampleForCategorical(
-        xdim=self.vc_model.kv_dim,
+        xdim=self.vc_model.kdim,
         ynum=360,
         hdim=hdim,
         fast_sampling=True,
     )
-    ksp_xdim = self.vc_model.kv_dim
+    ksp_xdim = self.vc_model.kdim
     ksp_ynum = len(P.dataset.speaker_ids)
     ksp_hdim = hdim
     self.club_ksp = CLUBSampleForCategorical3(
@@ -232,7 +245,7 @@ class VCModule(BaseLightningModule):
             use_spectral_norm=False,  # spectral norm の weight / sigma で div by zero になってたので
         ),
         len(P.dataset.speaker_ids) * 2,  # ADC-GAN
-        norm_feats=True,
+        norm_feats=False,
     )
 
     self.batch_rand = Random(94324203)
@@ -493,7 +506,7 @@ if __name__ == "__main__":
 
   P = Preparation("cuda")
 
-  datamodule = DataModule08(P, frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, num_workers=12)
+  datamodule = DataModule08(P, frames=256, frames_ref=64, n_refs=32, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200)
 
   total_steps = 20000
   total_actual_steps = 20000
