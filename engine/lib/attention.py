@@ -33,6 +33,8 @@ def sdp_attn_discrete(Q, K, V, dropout=0.0, need_weights=False) -> Tensor:
   # discrete[i, j, k] = V[i, discrete_i[i, j, k], k]
   discrete = torch.gather(V, dim=1, index=discrete_i.expand(-1, -1, V.size(-1)))
 
+  attn_weight.scatter_(dim=-1, index=discrete_i, value=attn_weight.max().item())  # for visualization
+
   assert continous.shape == discrete.shape
   return discrete.detach() + continous - continous.detach(), attn_weight
 

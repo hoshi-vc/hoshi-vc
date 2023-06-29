@@ -96,12 +96,21 @@ def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tenso
   self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
 @torch._dynamo.disable()
-def log_audios2(self, P: "Preparation", names: list[str], sr: int, y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
+def log_audios2(self,
+                P: "Preparation",
+                names: list[str],
+                sr: int,
+                y: Tensor,
+                y_hat: Tensor,
+                y_hat_cheat: Optional[Tensor] = None,
+                cols: Optional[list[str]] = None,
+                folder="Audio"):
   step = self.batches_that_stepped()
 
   columns = ["index", "original", "reconstructed"]
   if y_hat_cheat is not None:
     columns.append("reconstructed_cheat")
+  if cols: columns = cols
 
   data = []
   for i, name in enumerate(names):
