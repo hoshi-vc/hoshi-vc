@@ -3,6 +3,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -21,12 +23,14 @@ class BasicDiscriminator(nn.Module):
   # Based on GANSpeech :: https://arxiv.org/pdf/2106.15153.pdf
   # Conv1d に spectral_norm をかけた。
   # Conditioning は取り除いた。
-  def __init__(self, dims: list[int], kernels: list[int], strides: list[int], use_spectral_norm: bool):
+  def __init__(self, dims: list[int], kernels: list[int], strides: list[int], use_spectral_norm: bool, avg_pool: Optional[nn.Module] = None):
     super().__init__()
     norm_f = weight_norm if use_spectral_norm == False else spectral_norm
 
     # dims: (hdim1, hdim2, ..., odim)
     assert len(dims) == len(kernels) == len(strides)
+
+    if avg_pool is None: avg_pool = nn.AdaptiveAvgPool2d(1)  # 1x1 の画像にまとめる
 
     dims = [1] + dims  # (idim, hdim1, hdim2, ..., odim)
 
@@ -44,7 +48,7 @@ class BasicDiscriminator(nn.Module):
         ]
       else:
         modules = [
-            nn.AdaptiveAvgPool2d(1),  # 1x1 の画像にまとめる
+            avg_pool,
             norm_f(nn.Conv2d(dims[i], dims[i + 1], kernels[i], strides[i], kernels[i] // 2)),
         ]
 
@@ -63,26 +67,24 @@ class BasicDiscriminator(nn.Module):
       x = module(x)
       features.append(x)
 
-    features, out = features[:-1], features[-1]  # out: (batch, odim, 1, 1)
-    out = out.squeeze(2).squeeze(2)  # (batch, odim)
+    features, out = features[:-1], features[-1]  # out: (batch, odim, h, w)
     return out, features
 
 class ACDiscriminator(nn.Module):
   def __init__(self, base: BasicDiscriminator, n_class: int, norm_feats: bool):
     super().__init__()
     self.base = base
-    self.aux_linear = nn.Linear(base.odim, n_class)
+    self.aux_linear = nn.Conv2d(base.odim, n_class, 1)
     self.norm_feats = norm_feats
 
   def forward(self, x: Tensor):
     # x: (batch, time, freq)
-    # s: (batch, 1) :: 0 ~ n_class - 1
+    # c: (batch, n_class, h, w)
 
     # out: (batch, odim)
     out, features = self.base(x)
 
     features += [out]
-    c = self.aux_linear(out)
 
     # Feature Normalization :: Proposed by ReACGAN
     # TODO: ReACGAN では self.aux_linear の weights も normalize している
@@ -93,13 +95,16 @@ class ACDiscriminator(nn.Module):
     if self.norm_feats:
       out = F.normalize(out, dim=1)  # 超球面上に投影
 
+    c = self.aux_linear(out)
+
     return c, features
 
 def aux_loss(c: Tensor, s: Tensor):
-  # c: (batch, n_class)
+  # c: (batch, n_class, h, w)
   # s: (batch, 1) :: 0 ~ n_class - 1
 
-  c = torch.log_softmax(c, dim=-1)
-  loss = F.nll_loss(c, s.squeeze(-1))
+  c = torch.log_softmax(c, dim=1)
+  s = s.unsqueeze(-1).expand(-1, c.size(2), c.size(3))  # -> (batch, h, w)
+  loss = F.nll_loss(c, s)
 
   return loss
