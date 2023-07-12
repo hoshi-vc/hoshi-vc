@@ -18,7 +18,7 @@ from engine.lib.utils import NPArray, clamp
 from engine.prev.attempt08_prepare_soft_lut import LUT_ROOT
 from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, P)
 
-class Feats09(NamedTuple):
+class Feats10(NamedTuple):
   audio: Tensor
   speaker: Tensor
   energy: Tensor
@@ -29,11 +29,11 @@ class Feats09(NamedTuple):
   pitch_v: Tensor
   soft: Tensor
 
-class Entry09(NamedTuple):
-  src: Feats09
-  ref: list[Feats09]
+class Entry10(NamedTuple):
+  src: Feats10
+  ref: list[Feats10]
   tgt_speaker: Tensor
-  tgt_ref: list[Feats09]
+  tgt_ref: list[Feats10]
 
 class NPAccessor:
   def __init__(self, cache: bool):
@@ -55,7 +55,7 @@ class NPAccessor:
   def clear_cache(self) -> None:
     self.cache_dict.clear()
 
-class Dataset09(Dataset):
+class Dataset10(Dataset):
   def __init__(
       self,
       accessor: NPAccessor,
@@ -99,10 +99,10 @@ class Dataset09(Dataset):
 
     self.rand_tgt = Random(rand_tgt)
 
-  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats09:
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
     end = start + frames
 
-    return Feats09(
+    return Feats10(
         audio=np.array(self._load(d / "audio.npy")[start * 256:end * 256]),
         speaker=np.array([speaker_id]),
         energy=np.array(self._load(d / "energy.npy")[start:end]),
@@ -121,7 +121,7 @@ class Dataset09(Dataset):
   def __len__(self) -> int:
     return len(self.starts)
 
-  def __getitem__(self, index: int) -> Entry09:
+  def __getitem__(self, index: int) -> Entry10:
     d, dref, faiss, speaker_id, start = self.starts[index]
     if self.rand_start: start += self.rand_start.randint(0, self.frames)
 
@@ -184,7 +184,7 @@ class Dataset09(Dataset):
 
     assert len(ref_starts) == self.n_refs
 
-    refs: list[Feats09] = []
+    refs: list[Feats10] = []
     for ref_start in ref_starts:
       ref = self.load_entry(dref, speaker_id, ref_start, self.frames_ref)
       refs.append(ref)
@@ -226,20 +226,20 @@ class Dataset09(Dataset):
 
     assert len(ref_starts) == self.n_refs
 
-    tgt_refs: list[Feats09] = []
+    tgt_refs: list[Feats10] = []
     for ref_start in ref_starts:
       ref = self.load_entry(tgt_dref, tgt_speaker_id, ref_start, self.frames_ref)
       tgt_refs.append(ref)
 
     # === Return
 
-    return Entry09(src, refs, np.array([tgt_speaker_id]), tgt_refs)
+    return Entry10(src, refs, np.array([tgt_speaker_id]), tgt_refs)
 
 def intersect(start1: int, end1: int, start2: int, end2: int) -> bool:
   """ [start1, end1) と [start2, end2) の共通部分があるかどうかを判定する。 """
   return start1 < end2 and start2 < end1
 
-class DataModule09(L.LightningDataModule):
+class DataModule10(L.LightningDataModule):
   def __init__(
       self,
       frames: int,
@@ -281,7 +281,7 @@ class DataModule09(L.LightningDataModule):
     train_look = [faiss.read_index(str(p / "soft.index")) for p in train_look]
     # valid_look = [faiss.read_index(str(p / "soft.index")) for p in valid_look]
 
-    self.intra_train = Dataset09(
+    self.intra_train = Dataset10(
         accessor=self.accessor,
         dirs=train_dirs,
         dirs_ref=train_dirs,
@@ -298,7 +298,7 @@ class DataModule09(L.LightningDataModule):
         rand_tgt=29836458,
         same_density=self.same_density,
     )
-    self.intra_valid = Dataset09(
+    self.intra_valid = Dataset10(
         accessor=self.accessor,
         dirs=valid_dirs,
         dirs_ref=train_dirs,

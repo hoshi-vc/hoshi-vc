@@ -31,7 +31,7 @@ from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
 from engine.lib.fastspeech import FFNBlock
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import AttrDict, hide_warns, mix
-from engine.prev.attempt10_dataset import DataModule09, Entry09
+from engine.prev.attempt10_dataset import DataModule10, Entry10
 from engine.singleton import DATA_DIR, FEATS_DIR, P
 from engine.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim1,
                           new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, step_optimizer, step_optimizers)
@@ -242,7 +242,7 @@ class VCModel(nn.Module):
   def forward_decode(self, value: Tensor, energy: Tensor, pitch: Tensor):
     return self.decode(torch.cat([value, energy, pitch], dim=-1))
 
-  def forward(self, batch: Entry09, src_ref_start: int, src_ref_len: int):
+  def forward(self, batch: Entry10, src_ref_start: int, src_ref_len: int):
     # key: 似たような発音ほど近い表現になってほしい
     #      話者性が多少残ってても lookup 後の value への影響は間接的なので多分問題ない
 
@@ -418,7 +418,7 @@ class VCModule(BaseLightningModule):
 
   def _process_batch(
       self,
-      batch: Entry09,
+      batch: Entry10,
       self_ratio: float,
       step: int,
       e2e: bool,
@@ -606,7 +606,7 @@ class VCModule(BaseLightningModule):
   def vocoder_forward(self, mel: Tensor):
     return self.vocoder(mel.transpose(1, 2)).squeeze(1)
 
-  def training_step(self, batch: Entry09, batch_idx: int):
+  def training_step(self, batch: Entry10, batch_idx: int):
     step = self.batches_that_stepped()
 
     self_ratio = self.self_ratio(step)
@@ -629,7 +629,7 @@ class VCModule(BaseLightningModule):
       if step % 25000 == 0: sch_d.step()  # 25000: do_02500000 の steps/epoch
       sch_spd.step()
 
-  def validation_step(self, batch: Entry09, batch_idx: int):
+  def validation_step(self, batch: Entry10, batch_idx: int):
     step = self.batches_that_stepped()
     mel = batch.src.mel
     y = batch.src.audio
@@ -719,13 +719,13 @@ class VCModule(BaseLightningModule):
 if __name__ == "__main__":
 
   PROJECT = Path(__file__).stem.split("_")[0].split(" ")[0]
-  assert PROJECT.startswith("attempt08")
-  PROJECT = "attempt08"
+  assert PROJECT.startswith("attempt10")
+  PROJECT = "attempt10"
 
   setup_train_environment()
 
   P.set_device("cuda")
-  datamodule = DataModule09(
+  datamodule = DataModule10(
       P, frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, num_workers=12)
 
   total_steps = 100000

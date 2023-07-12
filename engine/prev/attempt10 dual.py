@@ -9,7 +9,7 @@ import torch
 from torch import Tensor, nn
 
 from engine.lib.layers import Buckets, Transpose
-from engine.prev.attempt10_dataset import Entry09
+from engine.prev.attempt10_dataset import Entry10
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -110,7 +110,7 @@ class VCModel(nn.Module):
   def forward_value2(self, energy: Tensor, pitch: Tensor, mel: Tensor):
     return self.encode_value2(torch.cat([energy, mel], dim=-1))
 
-  def forward(self, batch: Entry09):
+  def forward(self, batch: Entry10):
     n_refs = len(batch.ref)
     n_batch = len(batch.src.energy)
     ref_len = batch.ref[0].energy.shape[1]

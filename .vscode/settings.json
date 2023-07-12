@@ -25,6 +25,7 @@
   },
   "python.formatting.provider": "yapf",
   "typescript.preferences.importModuleSpecifier": "non-relative",
+  "python.analysis.diagnosticMode": "workspace",
   "files.exclude": {
     // default settings
     "**/.git": true,

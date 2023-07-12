@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 import engine.prev.attempt10 as Attempt
 from engine.lib.utils import NPArray, np_safesave
-from engine.prev.attempt10_dataset import Entry09, Feats09
+from engine.prev.attempt10_dataset import Entry10, Feats10
 from engine.singleton import CREPE_MODEL, DATA_DIR, FEATS_DIR, PITCH_TOPK, P
 
 CKPT = DATA_DIR / "attempt07/checkpoints/fine-lion-1/7p0mdwvn/last.ckpt"
@@ -50,13 +50,13 @@ class FeatureDataset(Dataset):
   def __len__(self) -> int:
     return len(self.starts)
 
-  def __getitem__(self, index: int) -> Entry09:
+  def __getitem__(self, index: int) -> Entry10:
     d, speaker_id, start = self.starts[index]
 
     # TODO: 面倒なので直接呼んでる
     return IntraDomainDataset4.load_entry(None, d, speaker_id, start, self.frames)
 
-def load_ref_entry(speaker: str, frames=None) -> Feats09:
+def load_ref_entry(speaker: str, frames=None) -> Feats10:
   frames = frames or START_HOP * 8
 
   feat_dir = FEATS_DIR / "parallel100" / speaker
@@ -65,12 +65,12 @@ def load_ref_entry(speaker: str, frames=None) -> Feats09:
   # TODO: 面倒なので直接呼んでる
   entry = IntraDomainDataset4.load_entry(None, feat_dir, speaker_id, 0, frames)
 
-  entry: Feats09 = default_collate([entry])
-  entry: Feats09 = model.transfer_batch_to_device(entry, model.device, 0)
+  entry: Feats10 = default_collate([entry])
+  entry: Feats10 = model.transfer_batch_to_device(entry, model.device, 0)
 
   return entry
 
-def calc_mean_pitch(entry: Feats09) -> NPArray:
+def calc_mean_pitch(entry: Feats10) -> NPArray:
   mask = entry.pitch_v > 0.5
   return (entry.pitch_i * mask).sum() / mask.sum()
 
@@ -96,7 +96,7 @@ class Shuffler:
     return item
 
 def prepare_audio():
-  ref_map: dict[str, Feats09] = {}
+  ref_map: dict[str, Feats10] = {}
   pitch_map: dict[str, NPArray] = {}
   spkemb_map: dict[str, Tensor] = {}
   ref_rand = Random(67648768)
@@ -125,7 +125,7 @@ def prepare_audio():
       audios = []
       for i, batch in tqdm(enumerate(loader), total=len(loader), ncols=0, desc=f"Loading {speaker_id}", leave=False):
         with torch.inference_mode():
-          batch: Feats09 = model.transfer_batch_to_device(batch, model.device, 0)
+          batch: Feats10 = model.transfer_batch_to_device(batch, model.device, 0)
 
           audio = None
           audio_score_map: list[tuple[float, Tensor, Any]] = []

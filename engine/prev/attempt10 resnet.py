@@ -10,7 +10,7 @@ from torch import nn
 
 from engine.lib.attention import MultiHeadAttention
 from engine.lib.layers import ResDown, ResUp, UpSample
-from engine.prev.attempt10_dataset import Entry09
+from engine.prev.attempt10_dataset import Entry10
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -62,7 +62,7 @@ class VCModel(nn.Module):
         nn.Conv2d(base, 1, kernel_size=1, padding=0),
     )
 
-  def forward(self, batch: Entry09):
+  def forward(self, batch: Entry10):
     n_refs = len(batch.ref)
     n_batch = len(batch.src.mel)
     ref_len = batch.ref[0].mel.shape[1]
