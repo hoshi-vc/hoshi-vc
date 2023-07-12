@@ -8,8 +8,8 @@
 import torch
 from torch import Tensor, nn
 
+from engine.attempts.a10_dataset import Entry10
 from engine.lib.layers import Buckets, Transpose
-from engine.prev.attempt10_dataset import Entry10
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):

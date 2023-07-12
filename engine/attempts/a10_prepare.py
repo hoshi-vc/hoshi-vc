@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from engine.singleton import DATA_DIR, P
 
-LUT_ROOT = DATA_DIR / "attempt08" / "lookup"
+LUT_ROOT = DATA_DIR / "a10" / "lookup"
 
 def prepare_audio():
   for category_id in ["parallel100", "nonpara30"]:

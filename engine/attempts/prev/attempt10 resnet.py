@@ -8,9 +8,9 @@
 import torch
 from torch import nn
 
+from engine.attempts.a10_dataset import Entry10
 from engine.lib.attention import MultiHeadAttention
 from engine.lib.layers import ResDown, ResUp, UpSample
-from engine.prev.attempt10_dataset import Entry10
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):

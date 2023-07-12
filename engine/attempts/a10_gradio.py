@@ -20,28 +20,15 @@ import torchaudio
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import engine.prev.attempt10 as Attempt
+import engine.attempts.a10 as Attempt
+from engine.attempts.a10_dataset import Feats10
 from engine.lib.pyworld import pyworld_vc
 from engine.lib.utils import np_safesave
-from engine.prev.attempt10_dataset import Dataset10, Feats10
 from engine.singleton import DATA_DIR, FEATS_DIR, P
 
 # TODO: index.reconstruct_batch を使って key を復元したいけど、なぜかうまくいかなかった。
 
-# CKPT = DATA_DIR / "attempt07/checkpoints/still-sponge-23/xe0uvvce/last.ckpt"
-# CKPT = DATA_DIR / "attempt07/checkpoints/devout-leaf-28/n5yobotl/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/dulcet-plant-77/qmnaevyy/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/driven-frost-81/q4zejkzl/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/rural-fog-97/m9upk9dm/last.ckpt"  # 08ca
-# CKPT = DATA_DIR / "attempt08/checkpoints/quiet-mountain-101/4w4378y0/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/earnest-wood-107/rsvomzlu/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/graceful-disco-108/29w53sxj/last.ckpt"
-# CKPT = DATA_DIR / "attempt08/checkpoints/driven-butterfly-113/33a18oza/last.ckpt"  # 08e
-# CKPT = DATA_DIR / "attempt08/checkpoints/dutiful-forest-130/83lxd9jt/last.ckpt" # 08f
-# CKPT = DATA_DIR / "attempt08/checkpoints/icy-puddle-139/2qsisbet/last.ckpt" # 08, low ref
-# CKPT = DATA_DIR / "attempt08/checkpoints/dark-fire-140/plmh06q1/last.ckpt"  # 08h
-# CKPT = DATA_DIR / "attempt08/checkpoints/golden-sun-141/m44ug75k/last.ckpt"  # 08h
-CKPT = DATA_DIR / "attempt08/checkpoints/fresh-paper-144/6keqvh6s/last.ckpt"  # 08ca
+CKPT = DATA_DIR / "a10/checkpoints/rosy-feather-2/un8iamko/last.ckpt"
 
 SAVE_DIR = DATA_DIR / "gradio" / CKPT.relative_to(DATA_DIR).with_suffix("")
 
@@ -156,7 +143,6 @@ def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift, ex_key, ex_val,
 
   with torch.inference_mode():
     energy = energy.to(model.device, torch.float32).unsqueeze(0)
-    # energy = torch.round(energy * 2) / 2
     # phoneme_i = phoneme_i.to(model.device, torch.int64).unsqueeze(0)
     # phoneme_v = phoneme_v.to(model.device, torch.float32).unsqueeze(0)
     mel = mel.to(model.device, torch.float32).unsqueeze(0)
@@ -164,9 +150,11 @@ def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift, ex_key, ex_val,
     pitch_i = pitch_i.to(model.device, torch.float32).unsqueeze(0)
 
     pitch_i = pitch_i * pitch_scale + pitch_shift
-    # pitch_i = torch.round(pitch_i / 16) * 16
     pitch_i = torch.clamp(pitch_i, 0, 360 - 1)
     pitch_i = pitch_i.to(torch.int64)
+
+    energy = Attempt.discrete_energy(energy)
+    pitch_i = Attempt.discrete_pitch(pitch_i)
 
     src_energy = model.vc_model.forward_energy(energy)
     src_pitch = model.vc_model.forward_pitch(pitch_i)
@@ -232,7 +220,6 @@ def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift, ex_key, ex_val,
     return tgt_audio, 22050
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-DEVICE = "cpu"
 
 P.set_device(DEVICE)
 

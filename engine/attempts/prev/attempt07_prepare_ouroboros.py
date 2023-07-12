@@ -19,9 +19,9 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, default_collate
 from tqdm import tqdm
 
-import engine.prev.attempt10 as Attempt
+import engine.attempts.a10 as Attempt
+from engine.attempts.a10_dataset import Entry10, Feats10
 from engine.lib.utils import NPArray, np_safesave
-from engine.prev.attempt10_dataset import Entry10, Feats10
 from engine.singleton import CREPE_MODEL, DATA_DIR, FEATS_DIR, PITCH_TOPK, P
 
 CKPT = DATA_DIR / "attempt07/checkpoints/fine-lion-1/7p0mdwvn/last.ckpt"

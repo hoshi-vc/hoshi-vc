@@ -23,6 +23,11 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 
 import engine.hifi_gan.models as VOC
+from engine.attempts.a10_dataset import DataModule10, Entry10, Feats10
+from engine.attempts.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, club_ksp_net, default_hifigan, load_hifigan_do, load_hifigan_g,
+                                   log_attentions, log_audios, log_lr, log_spectrograms, log_spksim1, loss_hifigan_d, loss_hifigan_g, loss_spd_adcgan,
+                                   loss_spd_adcgan_g, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, spd_net, step_optimizer,
+                                   step_optimizers)
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator
@@ -31,11 +36,6 @@ from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
 from engine.lib.fastspeech import FFNBlock
 from engine.lib.layers import Buckets, Transpose
 from engine.lib.utils import hide_warns, mix
-from engine.prev.attempt10_dataset import DataModule10, Entry10, Feats10
-from engine.prev.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, club_ksp_net, default_hifigan, load_hifigan_do, load_hifigan_g,
-                               log_attentions, log_audios, log_lr, log_spectrograms, log_spksim1, loss_hifigan_d, loss_hifigan_g, loss_spd_adcgan,
-                               loss_spd_adcgan_g, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, spd_net, step_optimizer,
-                               step_optimizers)
 from engine.singleton import DATA_DIR, FEATS_DIR, P
 
 @cache
@@ -57,6 +57,11 @@ def discrete_pitch(pitch_i: Tensor):
 def discrete_energy(energy: Tensor):
   energy = torch.round(energy * 2) / 2
   return energy
+
+def conv_pitch(speaker: Tensor, pitch_i: Tensor, dtype: torch.dtype):
+  pitch_offset = [speaker_pitch(sp.item()) for sp in speaker]
+  pitch_offset = 360 / 2 - torch.tensor(pitch_offset, device=speaker.device, dtype=dtype).unsqueeze(0)
+  return torch.clamp(pitch_i + pitch_offset, 0, 360 - 1).to(torch.int64)
 
 class VCModel(nn.Module):
   def __init__(self, hdim: int):
@@ -172,14 +177,14 @@ class VCModel(nn.Module):
 
     self.lookup = MultiHeadAttention(kdim, vdim, 1, dropout=0.2, hard=True)
 
-    self.decode = nn.Sequential(
-        nn.Linear(vdim, hdim),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.Linear(hdim, 80),
-    )
+    # self.decode = nn.Sequential(
+    #     nn.Linear(vdim, hdim),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.Linear(hdim, 80),
+    # )
 
     # self.decode = nn.Sequential(
     #     nn.Linear(vdim, hdim),
@@ -256,10 +261,6 @@ class VCModel(nn.Module):
     n_batch = len(batch.src.energy)
     ref_len = batch.ref[0].energy.shape[1]
 
-    pitch_offset = [speaker_pitch(speaker.item()) for speaker in batch.src.speaker]
-    pitch_offset = 360 / 2 - torch.tensor(pitch_offset, device=batch.src.energy.device, dtype=batch.src.energy.dtype).unsqueeze(0)
-    conv_pitch = lambda pitch_i: torch.clamp(pitch_i + pitch_offset, 0, 360 - 1).to(torch.int64)
-
     src_ref_end = src_ref_start + src_ref_len
 
     # import matplotlib
@@ -282,14 +283,16 @@ class VCModel(nn.Module):
     # play_audio(model.vocoder_forward(batch.ref[3].mel)[0], 22050)
     # raise Exception()
 
+    dtype_float = batch.src.energy.dtype
+
     # (...) -> (n_refs*n_batch, seq_len, dim)
     ref_energy = torch.stack([discrete_energy(o.energy) for o in batch.ref]).flatten(0, 1)
-    ref_pitch_i = torch.stack([discrete_pitch(conv_pitch(o.pitch_i)) for o in batch.ref]).flatten(0, 1)
+    ref_pitch_i = torch.stack([discrete_pitch(conv_pitch(o.speaker, o.pitch_i, dtype_float)) for o in batch.ref]).flatten(0, 1)
     ref_w2v2 = torch.stack([o.soft for o in batch.ref]).flatten(0, 1)
     ref_mel = torch.stack([o.mel for o in batch.ref]).flatten(0, 1)
 
     src_energy = discrete_energy(batch.src.energy)
-    src_pitch_i = discrete_pitch(conv_pitch(batch.src.pitch_i))
+    src_pitch_i = discrete_pitch(conv_pitch(batch.src.speaker, batch.src.pitch_i, dtype_float))
     src_w2v2 = batch.src.soft
     src_mel = batch.src.mel
 
@@ -659,19 +662,19 @@ class VCModule(BaseLightningModule):
 if __name__ == "__main__":
 
   PROJECT = Path(__file__).stem.split("_")[0].split(" ")[0]
-  assert PROJECT.startswith("attempt10")
-  PROJECT = "attempt10"
+  assert PROJECT.startswith("a10")
+  PROJECT = "a10"
 
   setup_train_environment()
 
   P.set_device("cuda")
   datamodule = DataModule10(frames=256, frames_ref=32, n_refs=32, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True)
 
-  total_steps = 100000
-  total_actual_steps = 50000
+  total_steps = 20000
+  total_actual_steps = 10000
   complex_metrics_batches = 50  # see: validation_step
 
-  VC_PHONEME_TOPK = 2
+  # VC_PHONEME_TOPK = 2
   model = VCModule(
       hdim=512,
       lr=1e-4,

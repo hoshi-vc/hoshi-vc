@@ -33,7 +33,6 @@ CREPE_MODEL = "tiny"
 PHONEME_TOPK = 8
 
 FEATS_DIR = DATA_DIR / "feats"
-FAISS_DIR = DATA_DIR / "attempt01" / "faiss"
 
 class _Singleton:
   def __init__(self, device: Device):
@@ -173,36 +172,6 @@ class _Singleton:
         np_safesave(PITCH_V, np.concatenate(pitch_v_list))
         np_safesave(HUBERT_SOFT, np.concatenate(hubert_soft_list))
 
-  def prepare_faiss(self):
-    for speaker_id in tqdm(self.dataset.speaker_ids, ncols=0, desc="Building index", leave=False):
-      DEST = str(FAISS_DIR / f"{speaker_id}.index")
-      if Path(DEST).exists(): continue
-
-      indices = self.get_wav2vec2(speaker_id)
-
-      # https://criteo.github.io/autofaiss/_source/autofaiss.external.html#autofaiss.external.quantize.build_index
-      # index, index_infos = build_index(
-      #     indices,
-      #     save_on_disk=True,
-      #     index_path=str(FAISS_DIR / f"{speaker_id}_knn.index"),
-      #     index_infos_path=str(FAISS_DIR / f"{speaker_id}_infos.json"),
-      #     metric_type="ip",
-      #     max_index_query_time_ms=1,
-      #     max_index_memory_usage="200MB",
-      #     min_nearest_neighbors_to_retrieve=16,
-      # )
-
-      index: faiss.IndexHNSWFlat = faiss.index_factory(indices.shape[1], "HNSW32", faiss.METRIC_INNER_PRODUCT)
-      index.hnsw.efSearch = 300
-      index.add(indices)
-      assert index.is_trained
-
-      make_parents(DEST)
-      faiss.write_index(index, DEST + ".tmp")
-      os.replace(DEST + ".tmp", DEST)
-
-      del indices
-
   def get_audio(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
     return np.load(FEATS_DIR / category_id / speaker_id / f"audio.npy")
 
@@ -227,9 +196,6 @@ class _Singleton:
 
   def get_hubert_soft(self, speaker_id: str, category_id: JVSCategory = "parallel100") -> NPArray:
     return np.load(FEATS_DIR / category_id / speaker_id / f"hubert_soft.npy")
-
-  def get_index(self, speaker_id: str) -> faiss.IndexHNSWFlat:
-    return faiss.read_index(str(FAISS_DIR / f"{speaker_id}.index"))
 
   @cached_property
   def vocoder(self):
@@ -280,7 +246,6 @@ P = _Singleton("cpu")
 if __name__ == "__main__":
   P.set_device("cuda")
   P.prepare_feats()
-  P.prepare_faiss()
 
 def check_feats():
   pass

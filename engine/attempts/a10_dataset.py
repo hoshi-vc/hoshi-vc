@@ -14,8 +14,8 @@ from faiss import IndexPreTransform
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, RandomSampler, Subset
 
+from engine.attempts.a10_prepare import LUT_ROOT
 from engine.lib.utils import NPArray, clamp
-from engine.prev.attempt08_prepare_soft_lut import LUT_ROOT
 from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, P)
 
 class Feats10(NamedTuple):
