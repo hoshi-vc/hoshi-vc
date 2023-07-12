@@ -67,7 +67,7 @@ class FeatureDataset(Dataset):
     d, speaker_id, start = self.starts[index]
 
     # TODO: 面倒なので直接呼んでる
-    return Dataset10.load_entry(None, d, speaker_id, start, self.frames)
+    return Feats10.load(None, d, speaker_id, start, self.frames)
 
 def prepare():
   for speaker_id in tqdm(P.dataset.speaker_ids, ncols=0, leave=False):

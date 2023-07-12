@@ -31,7 +31,7 @@ from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
 from engine.lib.fastspeech import FFNBlock
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import AttrDict, hide_warns, mix
-from engine.prev.attempt10_dataset import DataModule10, Entry10
+from engine.prev.attempt10_dataset import DataModule10, Entry10, Feats10
 from engine.singleton import DATA_DIR, FEATS_DIR, P
 from engine.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim1,
                           new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, step_optimizer, step_optimizers)
@@ -42,7 +42,7 @@ def speaker_pitch(speaker_id: int):
   feat_dir = FEATS_DIR / "parallel100" / speaker
 
   # TODO: 面倒なので直接呼んでる
-  entry = datamodule.load_entry(feat_dir, speaker_id, 0, 32 * 256)
+  entry = Feats10.load(datamodule.accessor, feat_dir, speaker_id, 0, 32 * 256)
 
   mask = entry.pitch_v > 0.5
   return (entry.pitch_i * mask).sum() / mask.sum()
@@ -78,46 +78,46 @@ class VCModel(nn.Module):
     # self.phoneme_embed = nn.Embedding(400, phoneme_dim)
     self.w2v2_embed = nn.Linear(256, w2v2_dim)
 
-    self.encode_key = nn.Sequential(
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.Linear(hdim, kdim),
-    )
+    # self.encode_key = nn.Sequential(
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.Linear(hdim, kdim),
+    # )
 
-    self.encode_key = nn.Sequential(
-        # input: (batch, src_len, hdim)
-        nn.Linear(energy_dim + pitch_dim + phoneme_dim, hdim),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        nn.RNN(hdim, hdim, batch_first=True),
-        GetNth(0),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-    )
+    # self.encode_key = nn.Sequential(
+    #     # input: (batch, src_len, hdim)
+    #     nn.Linear(energy_dim + pitch_dim + phoneme_dim, hdim),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     nn.RNN(hdim, hdim, batch_first=True),
+    #     GetNth(0),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    # )
 
-    self.encode_key = nn.Sequential(
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        nn.RNN(hdim, hdim, batch_first=True),
-        GetNth(0),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, kdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(kdim),
-    )
+    # self.encode_key = nn.Sequential(
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     nn.RNN(hdim, hdim, batch_first=True),
+    #     GetNth(0),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, kdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(kdim),
+    # )
 
     self.encode_key = nn.Sequential(
         nn.Linear(energy_dim + pitch_dim + w2v2_dim, hdim),
@@ -133,26 +133,26 @@ class VCModel(nn.Module):
         nn.LayerNorm(kdim),
     )
 
-    self.encode_value = nn.Sequential(
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
-        nn.Linear(hdim, vdim),
-    )
+    # self.encode_value = nn.Sequential(
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     FFNBlock(hdim, hdim, kernels=(3, 3), dropout=0.2),
+    #     nn.Linear(hdim, vdim),
+    # )
 
-    self.encode_value = nn.Sequential(
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, vdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(vdim),
-    )
+    # self.encode_value = nn.Sequential(
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, vdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(vdim),
+    # )
 
     self.encode_value = nn.Sequential(
         nn.Linear(energy_dim + mel_dim, hdim),
@@ -179,20 +179,20 @@ class VCModel(nn.Module):
         nn.Linear(hdim, 80),
     )
 
-    self.decode = nn.Sequential(
-        nn.Linear(vdim, hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        Transpose(1, 2),
-        nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
-        Transpose(1, 2),
-        nn.ReLU(),
-        nn.LayerNorm(hdim),
-        nn.Linear(hdim, 80),
-    )
+    # self.decode = nn.Sequential(
+    #     nn.Linear(vdim, hdim),
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     Transpose(1, 2),
+    #     nn.Conv1d(hdim, hdim, kernel_size=3, padding=1),
+    #     Transpose(1, 2),
+    #     nn.ReLU(),
+    #     nn.LayerNorm(hdim),
+    #     nn.Linear(hdim, 80),
+    # )
 
     self.decode = nn.Sequential(
         nn.Linear(vdim + energy_dim + pitch_dim, hdim),
@@ -726,7 +726,7 @@ if __name__ == "__main__":
 
   P.set_device("cuda")
   datamodule = DataModule10(
-      P, frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, num_workers=12)
+      frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, num_workers=12)
 
   total_steps = 100000
   total_actual_steps = 50000

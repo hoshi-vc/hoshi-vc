@@ -54,7 +54,7 @@ class FeatureDataset(Dataset):
     d, speaker_id, start = self.starts[index]
 
     # TODO: 面倒なので直接呼んでる
-    return IntraDomainDataset4.load_entry(None, d, speaker_id, start, self.frames)
+    return Feats10.load(None, d, speaker_id, start, self.frames)
 
 def load_ref_entry(speaker: str, frames=None) -> Feats10:
   frames = frames or START_HOP * 8
@@ -63,7 +63,7 @@ def load_ref_entry(speaker: str, frames=None) -> Feats10:
   speaker_id = P.dataset.speaker_ids.index(speaker)
 
   # TODO: 面倒なので直接呼んでる
-  entry = IntraDomainDataset4.load_entry(None, feat_dir, speaker_id, 0, frames)
+  entry = Feats10.load(None, feat_dir, speaker_id, 0, frames)
 
   entry: Feats10 = default_collate([entry])
   entry: Feats10 = model.transfer_batch_to_device(entry, model.device, 0)

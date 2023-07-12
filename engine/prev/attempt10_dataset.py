@@ -29,6 +29,24 @@ class Feats10(NamedTuple):
   pitch_v: Tensor
   soft: Tensor
 
+  def load(accessor: Optional["NPAccessor"], d: str, speaker_id: int, start: int, frames: int) -> "Feats10":
+    end = start + frames
+
+    if accessor is None: load = lambda p: np.load(Path(d) / p, mmap_mode="r")
+    else: load = lambda p: accessor.load(Path(d) / p)
+
+    return Feats10(
+        audio=np.array(load("audio.npy")[start * 256:end * 256]),
+        speaker=np.array([speaker_id]),
+        energy=np.array(load("energy.npy")[start:end]),
+        mel=np.array(load("melspec.npy")[start:end]),
+        phoneme_i=np.array(load(f"phoneme_i_{PHONEME_TOPK}.npy")[start:end], np.int64),
+        phoneme_v=np.array(load(f"phoneme_v_{PHONEME_TOPK}.npy")[start:end]),
+        pitch_i=np.array(load(f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end], np.int64),
+        pitch_v=np.array(load(f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end]),
+        soft=np.array(load("hubert_soft.npy")[start:end]),
+    )
+
 class Entry10(NamedTuple):
   src: Feats10
   ref: list[Feats10]
@@ -100,23 +118,7 @@ class Dataset10(Dataset):
     self.rand_tgt = Random(rand_tgt)
 
   def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
-    end = start + frames
-
-    return Feats10(
-        audio=np.array(self._load(d / "audio.npy")[start * 256:end * 256]),
-        speaker=np.array([speaker_id]),
-        energy=np.array(self._load(d / "energy.npy")[start:end]),
-        mel=np.array(self._load(d / "melspec.npy")[start:end]),
-        phoneme_i=np.array(self._load(d / f"phoneme_i_{PHONEME_TOPK}.npy")[start:end], np.int64),
-        phoneme_v=np.array(self._load(d / f"phoneme_v_{PHONEME_TOPK}.npy")[start:end]),
-        pitch_i=np.array(self._load(d / f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end], np.int64),
-        pitch_v=np.array(self._load(d / f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end]),
-        soft=np.array(self._load(d / "hubert_soft.npy")[start:end]),
-    )
-
-  def _load(self, file: Path) -> Any:
-    # return np.load(file, mmap_mode="r")
-    return self.accessor.load(file)
+    return Feats10.load(self.accessor, d, speaker_id, start, frames)
 
   def __len__(self) -> int:
     return len(self.starts)

@@ -4,7 +4,7 @@
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 from os import path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import Callable, Optional
 
 import lightning.pytorch as L
 import matplotlib
@@ -19,8 +19,7 @@ from torch import Tensor, cosine_similarity
 from wandb.wandb_run import Run
 
 from engine.lib.utils_ui import (plot_attention, plot_spectrograms, plot_spectrograms2)
-
-if TYPE_CHECKING: from engine.singleton import DATA_DIR, P
+from engine.singleton import DATA_DIR, P
 
 def setup_train_environment(seed=90212374):
   seed_everything(seed, workers=True)
