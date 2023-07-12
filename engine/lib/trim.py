@@ -102,7 +102,7 @@ if __name__ == "__main__":
   from torch import as_tensor as T
 
   from engine.lib.utils_ui import play_audio, plot_spectrogram
-  from engine.prepare import Preparation
+  from engine.singleton import Preparation
   P = Preparation("cpu")
   item = P.dataset[100]
 

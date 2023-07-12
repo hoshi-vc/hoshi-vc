@@ -291,7 +291,7 @@ class HubertSoft:  # (feat_len, 256)
 if __name__ == "__main__":
   from tqdm import tqdm
 
-  from engine.prepare import Preparation
+  from engine.singleton import Preparation
 
   P = Preparation("cpu")
   item = P.dataset[0]

@@ -21,7 +21,7 @@ from wandb.wandb_run import Run
 
 from engine.lib.utils_ui import (plot_attention, plot_spectrograms, plot_spectrograms2)
 
-if TYPE_CHECKING: from engine.prepare import Preparation
+if TYPE_CHECKING: from engine.singleton import Preparation
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
