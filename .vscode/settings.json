@@ -35,7 +35,8 @@
     "**/.DS_Store": true,
     "**/Thumbs.db": true,
     // additional settings
-    "**/__pycache__": true
+    "**/__pycache__": true,
+    "data/wandb/*/*": true
   },
   "files.watcherExclude": {
     // default settings

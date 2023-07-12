@@ -25,16 +25,18 @@ from torch.optim import AdamW
 import engine.hifi_gan.models as VOC
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
-from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
+from engine.lib.acgan import ACDiscriminator
 from engine.lib.attention import MultiHeadAttention
 from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
 from engine.lib.fastspeech import FFNBlock
-from engine.lib.layers import Buckets, GetNth, Transpose
-from engine.lib.utils import AttrDict, hide_warns, mix
+from engine.lib.layers import Buckets, Transpose
+from engine.lib.utils import hide_warns, mix
 from engine.prev.attempt10_dataset import DataModule10, Entry10, Feats10
+from engine.prev.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, club_ksp_net, default_hifigan, load_hifigan_do, load_hifigan_g,
+                               log_attentions, log_audios, log_lr, log_spectrograms, log_spksim1, loss_hifigan_d, loss_hifigan_g, loss_spd_adcgan,
+                               loss_spd_adcgan_g, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, spd_net, step_optimizer,
+                               step_optimizers)
 from engine.singleton import DATA_DIR, FEATS_DIR, P
-from engine.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim1,
-                          new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, step_optimizer, step_optimizers)
 
 @cache
 def speaker_pitch(speaker_id: int):
@@ -314,9 +316,10 @@ class VCModel(nn.Module):
     ref_pitch_i = ref_pitch_i.unflatten(0, (n_refs, n_batch))
 
     # (...) -> (n_batch, n_refs*seq_len, feat_dim)
-    ref_key = torch.cat([src_key[:, src_ref_start:src_ref_end], ref_key.transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
-    ref_value = torch.cat([src_value[:, src_ref_start:src_ref_end], ref_value.transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
-    ref_pitch_i = torch.cat([src_pitch_i[:, src_ref_start:src_ref_end], ref_pitch_i.transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+    pitck_cat = lambda src, ref: torch.cat([src[:, src_ref_start:src_ref_end], ref.transpose(0, 1).flatten(1, 2)[:, src_ref_len:]], dim=1)
+    ref_key = pitck_cat(src_key, ref_key)
+    ref_value = pitck_cat(src_value, ref_value)
+    ref_pitch_i = pitck_cat(src_pitch_i, ref_pitch_i)
 
     assert ref_key.shape[1] == ref_len * n_refs, f"ref_key.shape={ref_key.shape}, ref_len={ref_len}, n_refs={n_refs}"
 
@@ -348,49 +351,16 @@ class VCModule(BaseLightningModule):
     self.vocoder_mpd = VOC.MultiPeriodDiscriminator()
     self.vocoder_msd = VOC.MultiScaleDiscriminator()
 
-    self.club_val = CLUBSampleForCategorical(
-        xdim=self.vc_model.vdim,
-        ynum=360,
-        hdim=hdim,
-        fast_sampling=True,
-    )
-    self.club_key = CLUBSampleForCategorical(
-        xdim=self.vc_model.kdim,
-        ynum=360,
-        hdim=hdim,
-        fast_sampling=True,
-    )
-    ksp_xdim = self.vc_model.kdim
-    ksp_ynum = len(P.dataset.speaker_ids)
-    ksp_hdim = hdim
-    self.club_ksp = CLUBSampleForCategorical3(
-        xdim=ksp_xdim,
-        ynum=ksp_ynum,
-        hdim=hdim,
-        fast_sampling=True,
-        logvar=nn.Sequential(
-            nn.Linear(ksp_xdim, ksp_hdim),
-            nn.ReLU(),
-            Transpose(1, 2),
-            nn.Conv1d(ksp_hdim, ksp_hdim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(ksp_hdim, ksp_hdim, kernel_size=3, padding=1),
-            Transpose(1, 2),
-            nn.ReLU(),
-            nn.Linear(ksp_hdim, ksp_ynum),
-        ),
-    )
+    n_speakers = len(P.dataset.speaker_ids)
+    kdim = self.vc_model.kdim
+    vdim = self.vc_model.vdim
 
-    self.speaker_d = ACDiscriminator(
-        BasicDiscriminator(
-            dims=[64, 128, 512, 128, 64],
-            kernels=[3, 5, 5, 5, 3],
-            strides=[1, 2, 2, 1, 1],
-            use_spectral_norm=False,  # spectral norm の weight / sigma で div by zero になってたので
-        ),
-        len(P.dataset.speaker_ids) * 2,  # ADC-GAN
-        norm_feats=False,
-    )
+    ksp_hdim = hdim
+    self.club_val = CLUBSampleForCategorical(vdim, 360, hdim=hdim)
+    self.club_key = CLUBSampleForCategorical(kdim, 360, hdim=hdim)
+    self.club_ksp = CLUBSampleForCategorical3(kdim, n_speakers, hdim=hdim, logvar=club_ksp_net(kdim, n_speakers, ksp_hdim))
+
+    self.speaker_d = ACDiscriminator(spd_net(), n_speakers * 2, norm_feats=False)  # ADC-GAN
 
     self.batch_rand = Random(94324203)
     self.clip_rand = Random(76482573)
@@ -411,9 +381,8 @@ class VCModule(BaseLightningModule):
 
     self.save_hyperparameters()
 
-    # NOTE: activates manual optimization.
+    # activates manual optimization.
     # https://lightning.ai/docs/pytorch/stable/common/optimization.html
-    # https://lightning.ai/docs/pytorch/stable/notebooks/lightning_examples/basic-gan.html
     self.automatic_optimization = False
 
   def _process_batch(
@@ -460,20 +429,16 @@ class VCModule(BaseLightningModule):
 
     # speaker discriminator
 
-    spd_real, _ = self.speaker_d(mel.detach())
-    spd_fake, _ = self.speaker_d(mel_hat.detach())
-    spd_loss_real = aux_loss(spd_real, batch.src.speaker * 2)
-    spd_loss_fake = aux_loss(spd_fake, batch.src.speaker * 2 + 1)
-
-    spd_loss = spd_loss_real + spd_loss_fake
+    spd_losses = loss_spd_adcgan(self.speaker_d, mel, mel_hat, batch.src.speaker)
+    spd_loss = spd_losses.real + spd_losses.fake
 
     if train:
       step_optimizer(self, opt_spd, spd_loss, self.grad_clip)
 
     if log:
       self.log(f"Charts (SPD)/{log}_spd", spd_loss)
-      self.log(f"Charts (SPD)/{log}_spd_real", spd_loss_real)
-      self.log(f"Charts (SPD)/{log}_spd_fake", spd_loss_fake)
+      self.log(f"Charts (SPD)/{log}_spd_real", spd_losses.real)
+      self.log(f"Charts (SPD)/{log}_spd_fake", spd_losses.fake)
 
     # CLUB
 
@@ -530,40 +495,29 @@ class VCModule(BaseLightningModule):
 
       # discriminator
 
-      y_df_hat_r, y_df_hat_g, _, _ = self.vocoder_mpd(e2e_y, y_g_hat.detach())
-      loss_disc_f = VOC.discriminator_loss(y_df_hat_r, y_df_hat_g)
-
-      y_ds_hat_r, y_ds_hat_g, _, _ = self.vocoder_msd(e2e_y, y_g_hat.detach())
-      loss_disc_s = VOC.discriminator_loss(y_ds_hat_r, y_ds_hat_g)
-
-      total_disc = loss_disc_s + loss_disc_f
+      losses_disc = loss_hifigan_d(self.vocoder_mpd, self.vocoder_msd, e2e_y, y_g_hat)
+      total_disc = losses_disc.s + losses_disc.f
 
       if train:
         step_optimizer(self, opt_d, total_disc, self.grad_clip)
 
       if log:
         self.log(f"Charts (Main)/{log}_e2e_disc", total_disc)
-        self.log(f"Charts (E2E)/{log}_e2e_disc_f", loss_disc_f)
-        self.log(f"Charts (E2E)/{log}_e2e_disc_s", loss_disc_s)
+        self.log(f"Charts (E2E)/{log}_e2e_disc_f", losses_disc.f)
+        self.log(f"Charts (E2E)/{log}_e2e_disc_s", losses_disc.s)
 
       # e2e generator loss
 
       loss_mel = F.l1_loss(e2e_mel, y_g_hat_mel)
 
-      y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = self.vocoder_mpd(e2e_y, y_g_hat)
-      y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = self.vocoder_msd(e2e_y, y_g_hat)
-      loss_fm_f = VOC.feature_loss(fmap_f_r, fmap_f_g)
-      loss_fm_s = VOC.feature_loss(fmap_s_r, fmap_s_g)
-      loss_gen_f, _ = VOC.generator_loss(y_df_hat_g)
-      loss_gen_s, _ = VOC.generator_loss(y_ds_hat_g)
-
-      e2e_model_loss = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel * 45.0
+      e2e_losses = loss_hifigan_g(self.vocoder_mpd, self.vocoder_msd, e2e_y, y_g_hat)
+      e2e_model_loss = e2e_losses.f + e2e_losses.s + e2e_losses.fm_f + e2e_losses.fm_s + loss_mel * 45.0
 
       if log:
-        self.log(f"Charts (E2E)/{log}_e2e_gen_f", loss_gen_f)
-        self.log(f"Charts (E2E)/{log}_e2e_gen_s", loss_gen_s)
-        self.log(f"Charts (E2E)/{log}_e2e_fm_f", loss_fm_f)
-        self.log(f"Charts (E2E)/{log}_e2e_fm_s", loss_fm_s)
+        self.log(f"Charts (E2E)/{log}_e2e_gen_f", e2e_losses.f)
+        self.log(f"Charts (E2E)/{log}_e2e_gen_s", e2e_losses.s)
+        self.log(f"Charts (E2E)/{log}_e2e_fm_f", e2e_losses.fm_f)
+        self.log(f"Charts (E2E)/{log}_e2e_fm_s", e2e_losses.fm_s)
         self.log(f"Charts (Main)/{log}_e2e_reconst", loss_mel)
 
       y_g_hat = y_g_hat.squeeze(1)
@@ -571,18 +525,12 @@ class VCModule(BaseLightningModule):
 
     # generator (speaker discriminator loss)
 
-    with torch.no_grad():
-      _, spd_f_real = self.speaker_d(mel)
-    spd_c_fake, spd_f_fake = self.speaker_d(mel_hat)
-
-    spd_g_fm = fm_loss(spd_f_real, spd_f_fake, F.l1_loss)
-    spd_g_pos = aux_loss(spd_c_fake, batch.src.speaker * 2)
-    spd_g_neg = aux_loss(spd_c_fake, batch.src.speaker * 2 + 1)
+    spd_g = loss_spd_adcgan_g(self.speaker_d, mel, mel_hat, batch.src.speaker)
 
     if log:
-      self.log(f"Charts (SPD)/{log}_spd_g_fm", spd_g_fm)
-      self.log(f"Charts (SPD)/{log}_spd_g_pos", spd_g_pos)
-      self.log(f"Charts (SPD)/{log}_spd_g_neg", spd_g_neg)
+      self.log(f"Charts (SPD)/{log}_spd_g_fm", spd_g.fm)
+      self.log(f"Charts (SPD)/{log}_spd_g_pos", spd_g.pos)
+      self.log(f"Charts (SPD)/{log}_spd_g_neg", spd_g.neg)
 
     # generator
 
@@ -590,7 +538,7 @@ class VCModule(BaseLightningModule):
     if e2e_ratio > 0: total_model = mix(x=e2e_model_loss, y=total_model, ratio_x=e2e_ratio)
     total_model += mi_val
     total_model += mi_ksp
-    total_model += spd_g_fm + spd_g_pos - spd_g_neg
+    total_model += spd_g.fm + spd_g.pos - spd_g.neg
 
     if train:
       if train_voc or debug:
@@ -614,11 +562,11 @@ class VCModule(BaseLightningModule):
 
     opt_model, opt_club, opt_voc, opt_d, opt_spd = self.optimizers()
     sch_model, sch_club, sch_voc, sch_d, sch_spd = self.lr_schedulers()
-    self.log("Charts (General)/lr", opt_model.optimizer.param_groups[0]["lr"])
-    self.log("Charts (General)/lr_club", opt_club.optimizer.param_groups[0]["lr"])
-    self.log("Charts (General)/lr_voc", opt_voc.optimizer.param_groups[0]["lr"])
-    self.log("Charts (General)/lr_d", opt_d.optimizer.param_groups[0]["lr"])
-    self.log("Charts (General)/lr_spd", opt_spd.optimizer.param_groups[0]["lr"])
+    log_lr(self, opt_model, "lr")
+    log_lr(self, opt_club, "lr_club")
+    log_lr(self, opt_voc, "lr_voc")
+    log_lr(self, opt_d, "lr_d")
+    log_lr(self, opt_spd, "lr_spd")
 
     self._process_batch(batch, self_ratio, step, e2e=False, e2e_frames=self.e2e_frames, train=True, log="train")
 
@@ -636,7 +584,7 @@ class VCModule(BaseLightningModule):
 
     complex_metrics = batch_idx < complex_metrics_batches
     e2e = batch_idx == 0 or complex_metrics
-    _, y_c, _, _, _ = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="vcheat")
+    _, y_c, _, _, _ = self._process_batch(batch, self_ratio=1.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="cheat")
     _, y_v, _, _, _ = self._process_batch(batch, self_ratio=0.0, step=step, e2e=e2e, e2e_frames=self.e2e_frames, log="valid")
 
     # MOSNet を入れるとモデルの学習が非常に遅くなる
@@ -647,7 +595,7 @@ class VCModule(BaseLightningModule):
     if complex_metrics:
       spksim = log_spksim1(self, y, y_v, y_c)
       self.log("valid_spksim", spksim["valid_spksim"].mean())
-      self.log("vcheat_spksim", spksim["vcheat_spksim"].mean())
+      self.log("cheat_spksim", spksim["cheat_spksim"].mean())
       self.val_outputs.append(spksim)
 
     if batch_idx == 0:
@@ -656,17 +604,16 @@ class VCModule(BaseLightningModule):
       names = [f"{i:02d}" for i in range(len(mel))]
       log_attentions(self, names, attn_c, "Attention (Cheat)")
       log_attentions(self, names, attn_v, "Attention")
-
       log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
       log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
-      log_audios2(self, names, 22050, y, y_v, y_c)
+      log_audios(self, names, 22050, [y, y_v, y_c], ["original", "valid", "cheat"])
 
   def on_validation_epoch_end(self):
     if len(self.val_outputs) > 0:
       v_spksim = torch.cat([x["valid_spksim"] for x in self.val_outputs]).cpu().numpy()
-      c_spksim = torch.cat([x["vcheat_spksim"] for x in self.val_outputs]).cpu().numpy()
+      c_spksim = torch.cat([x["cheat_spksim"] for x in self.val_outputs]).cpu().numpy()
       self.log_wandb({"Charts (SpkSim)/valid_hist": wandb.Histogram(v_spksim)})
-      self.log_wandb({"Charts (SpkSim)/vcheat_hist": wandb.Histogram(c_spksim)})
+      self.log_wandb({"Charts (SpkSim)/cheat_hist": wandb.Histogram(c_spksim)})
 
     self.val_outputs.clear()
 
@@ -696,22 +643,15 @@ class VCModule(BaseLightningModule):
       else:
         print("Loading pretrained HiFi-GAN weights...")
         g, do = self.hifi_gan_ckpt
-        g_data = torch.load(g, map_location=self.device)
-        do_data = torch.load(do, map_location=self.device)
-        last_epoch = do_data['epoch']
-        self.vocoder.load_state_dict(g_data["generator"])
-        self.vocoder_mpd.load_state_dict(do_data['mpd'])
-        self.vocoder_msd.load_state_dict(do_data['msd'])
-        opt_voc.load_state_dict(do_data['optim_g'])
-        opt_d.load_state_dict(do_data['optim_d'])
+        load_hifigan_g(g, self.vocoder, self.device)
+        metadata = load_hifigan_do(do, self.vocoder_mpd, self.vocoder_msd, opt_voc, opt_d, self.device)
+        last_epoch = metadata.epoch
 
     # TODO: resume 時に step に渡される値がリセットされていそう
-    sch_model = S.ChainedScheduler([
-        get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps),
-    ])
+    sch_model = get_cosine_schedule_with_warmup(opt_model, self.warmup_steps, self.total_steps)
     sch_club = S.LambdaLR(opt_club, lambda step: 1.0)
-    sch_voc = S.ExponentialLR(opt_voc, gamma=h.lr_decay, last_epoch=last_epoch)
-    sch_d = S.ExponentialLR(opt_d, gamma=h.lr_decay, last_epoch=last_epoch)
+    sch_voc = S.ExponentialLR(opt_voc, h.lr_decay, last_epoch)
+    sch_d = S.ExponentialLR(opt_d, h.lr_decay, last_epoch)
     sch_spd = S.MultiplicativeLR(opt_spd, lambda step: 1.0)
 
     return [opt_model, opt_club, opt_voc, opt_d, opt_spd], [sch_model, sch_club, sch_voc, sch_d, sch_spd]
@@ -725,15 +665,11 @@ if __name__ == "__main__":
   setup_train_environment()
 
   P.set_device("cuda")
-  datamodule = DataModule10(
-      frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, num_workers=12)
+  datamodule = DataModule10(frames=256, frames_ref=32, n_refs=32, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True)
 
   total_steps = 100000
   total_actual_steps = 50000
   complex_metrics_batches = 50  # see: validation_step
-
-  g_ckpt = DATA_DIR / "vocoder" / "g_02500000"
-  do_ckpt = DATA_DIR / "vocoder" / "do_02500000"
 
   VC_PHONEME_TOPK = 2
   model = VCModule(
@@ -748,19 +684,8 @@ if __name__ == "__main__":
       e2e_ratio=[(0, 0.0), (20000, 0.0), (24000, 1.0)],
       voc_train=[(0, False), (30000, True)],
       grad_clip=1.0,
-      hifi_gan=AttrDict({
-          "resblock": "1",
-          "learning_rate": 0.0002,
-          "adam_b1": 0.8,
-          "adam_b2": 0.99,
-          "lr_decay": 0.999,
-          "upsample_rates": [8, 8, 2, 2],
-          "upsample_kernel_sizes": [16, 16, 4, 4],
-          "upsample_initial_channel": 512,
-          "resblock_kernel_sizes": [3, 7, 11],
-          "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-      }),
-      hifi_gan_ckpt=(g_ckpt, do_ckpt),
+      hifi_gan=default_hifigan().config,
+      hifi_gan_ckpt=default_hifigan().ckpts,
   )
 
   wandb_logger = new_wandb_logger(PROJECT)

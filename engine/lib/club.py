@@ -108,7 +108,7 @@ class CLUBSampleForCategorical(nn.Module):
   xs: (...samples, xdim)
   ys: (...samples,)
   '''
-  def __init__(self, xdim: int, ynum: int, hdim: int, fast_sampling=False, logvar: Optional[nn.Module] = None):
+  def __init__(self, xdim: int, ynum: int, hdim: int, fast_sampling=True, logvar: Optional[nn.Module] = None):
     super().__init__()
 
     if logvar is None:
