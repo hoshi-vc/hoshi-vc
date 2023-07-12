@@ -4,7 +4,6 @@
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 from os import path
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 import lightning.pytorch as L
@@ -21,9 +20,7 @@ from wandb.wandb_run import Run
 
 from engine.lib.utils_ui import (plot_attention, plot_spectrograms, plot_spectrograms2)
 
-if TYPE_CHECKING: from engine.singleton import Preparation
-
-DATA_DIR = Path(__file__).parent.parent / "data"
+if TYPE_CHECKING: from engine.singleton import DATA_DIR, P
 
 def setup_train_environment(seed=90212374):
   seed_everything(seed, workers=True)
@@ -67,7 +64,7 @@ def log_attentions(self, names: list[str], attn: Tensor, folder="Attention"):
   plt.close("all")
 
 @torch._dynamo.disable()
-def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
+def log_audios(self, names: list[str], y: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
   step = self.batches_that_stepped()
 
   columns = ["index", "original", "reconstructed"]
@@ -97,7 +94,6 @@ def log_audios(self, P: "Preparation", names: list[str], y: Tensor, y_hat: Tenso
 
 @torch._dynamo.disable()
 def log_audios2(self,
-                P: "Preparation",
                 names: list[str],
                 sr: int,
                 y: Tensor,
@@ -131,15 +127,7 @@ def log_audios2(self,
   self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
 @torch._dynamo.disable()
-def log_audios3(self,
-                P: "Preparation",
-                names: list[str],
-                sr: int,
-                y: Tensor,
-                y_aug: Tensor,
-                y_hat: Tensor,
-                y_hat_cheat: Optional[Tensor] = None,
-                folder="Audio"):
+def log_audios3(self, names: list[str], sr: int, y: Tensor, y_aug: Tensor, y_hat: Tensor, y_hat_cheat: Optional[Tensor] = None, folder="Audio"):
   step = self.batches_that_stepped()
 
   columns = ["index", "original", "augmented", "reconstructed"]
@@ -167,7 +155,7 @@ def log_audios3(self,
   self.log_wandb({f"{folder}/{step:08d}": wandb.Table(data=data, columns=columns)})
 
 # TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
-def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot: Tensor, yc_rot: Tensor, folder="Charts (SpkSim)"):
+def log_spksim(self, y: Tensor, yv: Tensor, yc: Tensor, yv_rot: Tensor, yc_rot: Tensor, folder="Charts (SpkSim)"):
   """
   Args:
       y: ground truth audio
@@ -209,7 +197,7 @@ def log_spksim(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, yv_rot
   }
 
 # TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
-def log_spksim1(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, folder="Charts (SpkSim)"):
+def log_spksim1(self, y: Tensor, yv: Tensor, yc: Tensor, folder="Charts (SpkSim)"):
   y_spkemb = P.spkemb(y, 22050)
   y_v_spkemb = P.spkemb(yv, 22050)
   y_c_spkemb = P.spkemb(yc, 22050)
@@ -224,7 +212,7 @@ def log_spksim1(self, P: "Preparation", y: Tensor, yv: Tensor, yc: Tensor, folde
   }
 
 # TODO: この関数の汎用性が低すぎて、良くない処理のくくりだしに思える
-def log_spksim0(self, P: "Preparation", y: Tensor, yv: Tensor, folder="Charts (SpkSim)"):
+def log_spksim0(self, y: Tensor, yv: Tensor, folder="Charts (SpkSim)"):
   y_spkemb = P.spkemb(y, 22050)
   y_v_spkemb = P.spkemb(yv, 22050)
   v_spksim = cosine_similarity(y_spkemb, y_v_spkemb)

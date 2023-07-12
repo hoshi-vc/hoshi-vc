@@ -19,11 +19,10 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, default_collate
 from tqdm import tqdm
 
-import engine.attempt07_stage1 as Attempt
-from engine.dataset_feats import FeatureEntry4, IntraDomainDataset4
+import engine.prev.attempt10 as Attempt
 from engine.lib.utils import NPArray, np_safesave
-from engine.singleton import CREPE_MODEL, FEATS_DIR, PITCH_TOPK, Preparation
-from engine.utils import DATA_DIR
+from engine.prev.attempt10_dataset import Entry09, Feats09
+from engine.singleton import CREPE_MODEL, DATA_DIR, FEATS_DIR, PITCH_TOPK, P
 
 CKPT = DATA_DIR / "attempt07/checkpoints/fine-lion-1/7p0mdwvn/last.ckpt"
 
@@ -51,27 +50,27 @@ class FeatureDataset(Dataset):
   def __len__(self) -> int:
     return len(self.starts)
 
-  def __getitem__(self, index: int) -> FeatureEntry4:
+  def __getitem__(self, index: int) -> Entry09:
     d, speaker_id, start = self.starts[index]
 
-    # TODO: 面倒なので IntraDomainDataset4.load_entry を呼んでる
+    # TODO: 面倒なので直接呼んでる
     return IntraDomainDataset4.load_entry(None, d, speaker_id, start, self.frames)
 
-def load_ref_entry(speaker: str, frames=None) -> FeatureEntry4:
+def load_ref_entry(speaker: str, frames=None) -> Feats09:
   frames = frames or START_HOP * 8
 
   feat_dir = FEATS_DIR / "parallel100" / speaker
   speaker_id = P.dataset.speaker_ids.index(speaker)
 
-  # TODO: 面倒なので IntraDomainDataset4.load_entry を呼んでる
+  # TODO: 面倒なので直接呼んでる
   entry = IntraDomainDataset4.load_entry(None, feat_dir, speaker_id, 0, frames)
 
-  entry: FeatureEntry4 = default_collate([entry])
-  entry: FeatureEntry4 = model.transfer_batch_to_device(entry, model.device, 0)
+  entry: Feats09 = default_collate([entry])
+  entry: Feats09 = model.transfer_batch_to_device(entry, model.device, 0)
 
   return entry
 
-def calc_mean_pitch(entry: FeatureEntry4) -> NPArray:
+def calc_mean_pitch(entry: Feats09) -> NPArray:
   mask = entry.pitch_v > 0.5
   return (entry.pitch_i * mask).sum() / mask.sum()
 
@@ -97,7 +96,7 @@ class Shuffler:
     return item
 
 def prepare_audio():
-  ref_map: dict[str, FeatureEntry4] = {}
+  ref_map: dict[str, Feats09] = {}
   pitch_map: dict[str, NPArray] = {}
   spkemb_map: dict[str, Tensor] = {}
   ref_rand = Random(67648768)
@@ -126,7 +125,7 @@ def prepare_audio():
       audios = []
       for i, batch in tqdm(enumerate(loader), total=len(loader), ncols=0, desc=f"Loading {speaker_id}", leave=False):
         with torch.inference_mode():
-          batch: FeatureEntry4 = model.transfer_batch_to_device(batch, model.device, 0)
+          batch: Feats09 = model.transfer_batch_to_device(batch, model.device, 0)
 
           audio = None
           audio_score_map: list[tuple[float, Tensor, Any]] = []
@@ -242,9 +241,8 @@ if __name__ == "__main__":
   START_HOP = 256
   AUDIO_HOP = 256 * START_HOP * 4  # 最初の 256 は HiFi-GAN の hop_size, 最後の 4 はバッチサイズ的な
 
-  P = Preparation(DEVICE)
+  P.set_device(DEVICE)
 
-  Attempt.P = P  # TODO: もっといい方法ない？
   model = Attempt.VCModule.load_from_checkpoint(CKPT, map_location=DEVICE)
   model.eval()
   model.freeze()

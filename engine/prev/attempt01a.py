@@ -15,8 +15,7 @@ from tqdm import tqdm
 
 from engine.lib.utils import NPArray
 from engine.lib.utils_ui import play_audio, plot_spectrogram
-from engine.singleton import Preparation
-from engine.utils import DATA_DIR
+from engine.singleton import DATA_DIR, P
 
 LUT_ROOT = DATA_DIR / "attempt01a" / "lookup"
 
@@ -46,7 +45,7 @@ def prepare():
       save_index(soft, SOFT_FILE)
 
 if __name__ == "__main__":
-  P = Preparation("cuda")
+  P.set_device("cuda")
   P.prepare_feats()
   prepare()
 

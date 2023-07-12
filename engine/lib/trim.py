@@ -102,8 +102,8 @@ if __name__ == "__main__":
   from torch import as_tensor as T
 
   from engine.lib.utils_ui import play_audio, plot_spectrogram
-  from engine.singleton import Preparation
-  P = Preparation("cpu")
+  from engine.singleton import P
+
   item = P.dataset[100]
 
   audio_trimmed = trim_silence(item.audio[0], item.sr)

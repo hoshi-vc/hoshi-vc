@@ -23,17 +23,17 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 
 import engine.hifi_gan.models as VOC
-from engine.attempt08_dataset import DataModule08, Dataset08, Entry08
 from engine.fragment_vc.utils import get_cosine_schedule_with_warmup
 from engine.hifi_gan.meldataset import mel_spectrogram
 from engine.lib.acgan import ACDiscriminator, BasicDiscriminator, aux_loss
 from engine.lib.attention import MultiHeadAttention
 from engine.lib.club import CLUBSampleForCategorical, CLUBSampleForCategorical3
-from engine.lib.fastspeech import FFNBlock, PosFFT
+from engine.lib.fastspeech import FFNBlock
 from engine.lib.layers import Buckets, GetNth, Transpose
 from engine.lib.utils import AttrDict, hide_warns, mix
-from engine.singleton import FEATS_DIR, Preparation
-from engine.utils import (DATA_DIR, BaseLightningModule, BinarySchedule, LinearSchedule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim1,
+from engine.prev.attempt10_dataset import DataModule09, Entry09
+from engine.singleton import DATA_DIR, FEATS_DIR, P
+from engine.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, fm_loss, log_attentions, log_audios2, log_spectrograms, log_spksim1,
                           new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, step_optimizer, step_optimizers)
 
 @cache
@@ -41,7 +41,8 @@ def speaker_pitch(speaker_id: int):
   speaker = P.dataset.speaker_ids[speaker_id]
   feat_dir = FEATS_DIR / "parallel100" / speaker
 
-  entry = Dataset08.load_entry(datamodule, feat_dir, speaker_id, 0, 32 * 256)
+  # TODO: 面倒なので直接呼んでる
+  entry = datamodule.load_entry(feat_dir, speaker_id, 0, 32 * 256)
 
   mask = entry.pitch_v > 0.5
   return (entry.pitch_i * mask).sum() / mask.sum()
@@ -241,7 +242,7 @@ class VCModel(nn.Module):
   def forward_decode(self, value: Tensor, energy: Tensor, pitch: Tensor):
     return self.decode(torch.cat([value, energy, pitch], dim=-1))
 
-  def forward(self, batch: Entry08, src_ref_start: int, src_ref_len: int):
+  def forward(self, batch: Entry09, src_ref_start: int, src_ref_len: int):
     # key: 似たような発音ほど近い表現になってほしい
     #      話者性が多少残ってても lookup 後の value への影響は間接的なので多分問題ない
 
@@ -417,7 +418,7 @@ class VCModule(BaseLightningModule):
 
   def _process_batch(
       self,
-      batch: Entry08,
+      batch: Entry09,
       self_ratio: float,
       step: int,
       e2e: bool,
@@ -605,7 +606,7 @@ class VCModule(BaseLightningModule):
   def vocoder_forward(self, mel: Tensor):
     return self.vocoder(mel.transpose(1, 2)).squeeze(1)
 
-  def training_step(self, batch: Entry08, batch_idx: int):
+  def training_step(self, batch: Entry09, batch_idx: int):
     step = self.batches_that_stepped()
 
     self_ratio = self.self_ratio(step)
@@ -628,7 +629,7 @@ class VCModule(BaseLightningModule):
       if step % 25000 == 0: sch_d.step()  # 25000: do_02500000 の steps/epoch
       sch_spd.step()
 
-  def validation_step(self, batch: Entry08, batch_idx: int):
+  def validation_step(self, batch: Entry09, batch_idx: int):
     step = self.batches_that_stepped()
     mel = batch.src.mel
     y = batch.src.audio
@@ -644,7 +645,7 @@ class VCModule(BaseLightningModule):
     # see: https://www.isca-speech.org/archive_v0/VCC_BC_2020/pdfs/VCC2020_paper_34.pdf
 
     if complex_metrics:
-      spksim = log_spksim1(self, P, y, y_v, y_c)
+      spksim = log_spksim1(self, y, y_v, y_c)
       self.log("valid_spksim", spksim["valid_spksim"].mean())
       self.log("vcheat_spksim", spksim["vcheat_spksim"].mean())
       self.val_outputs.append(spksim)
@@ -658,7 +659,7 @@ class VCModule(BaseLightningModule):
 
       log_spectrograms(self, names, mel, mel_c, ymel_c, "Spectrogram (Cheat)")
       log_spectrograms(self, names, mel, mel_v, ymel_v, "Spectrogram")
-      log_audios2(self, P, names, 22050, y, y_v, y_c)
+      log_audios2(self, names, 22050, y, y_v, y_c)
 
   def on_validation_epoch_end(self):
     if len(self.val_outputs) > 0:
@@ -723,9 +724,9 @@ if __name__ == "__main__":
 
   setup_train_environment()
 
-  P = Preparation("cuda")
-
-  datamodule = DataModule08(P, frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, num_workers=12)
+  P.set_device("cuda")
+  datamodule = DataModule09(
+      P, frames=256, frames_ref=32, n_refs=64, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, num_workers=12)
 
   total_steps = 100000
   total_actual_steps = 50000

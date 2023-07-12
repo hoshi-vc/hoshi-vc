@@ -14,9 +14,9 @@ from faiss import IndexPreTransform
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, RandomSampler, Subset
 
-from engine.attempt08_prepare import LUT_ROOT
 from engine.lib.utils import NPArray, clamp
-from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, Preparation)
+from engine.prev.attempt08_prepare_soft_lut import LUT_ROOT
+from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, P)
 
 class Feats09(NamedTuple):
   audio: Tensor
@@ -242,7 +242,6 @@ def intersect(start1: int, end1: int, start2: int, end2: int) -> bool:
 class DataModule09(L.LightningDataModule):
   def __init__(
       self,
-      P: Preparation,
       frames: int,
       frames_ref: int,
       n_refs: int,
@@ -250,13 +249,12 @@ class DataModule09(L.LightningDataModule):
       batch_size: int,
       n_batches: int,
       n_batches_val: int,
-      same_density=False,
+      same_density: bool,
       cache=True,
       num_workers=8,
       prefetch_factor=2,
   ):
     super().__init__()
-    self.P = P
     self.frames = frames
     self.frames_ref = frames_ref
     self.n_refs = n_refs
@@ -273,12 +271,12 @@ class DataModule09(L.LightningDataModule):
     self.intra_valid: Any = None
 
   def setup(self, stage: str):
-    self.P.prepare_feats()
-    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
-    train_look = [LUT_ROOT / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
-    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
-    # valid_look = [LUT_ROOT / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
-    speaker_ids = [i for i, _ in enumerate(self.P.dataset.speaker_ids)]
+    P.prepare_feats()
+    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in P.dataset.speaker_ids]
+    train_look = [LUT_ROOT / "parallel100" / sid for sid in P.dataset.speaker_ids]
+    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in P.dataset.speaker_ids]
+    # valid_look = [LUT_ROOT / "nonpara30" / sid for sid in P.dataset.speaker_ids]
+    speaker_ids = [i for i, _ in enumerate(P.dataset.speaker_ids)]
 
     train_look = [faiss.read_index(str(p / "soft.index")) for p in train_look]
     # valid_look = [faiss.read_index(str(p / "soft.index")) for p in valid_look]

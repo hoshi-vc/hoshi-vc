@@ -20,12 +20,11 @@ import torchaudio
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import engine.attempt08ca as Attempt
-from engine.dataset_feats import FeatureEntry4, IntraDomainDataset4
+import engine.prev.attempt10 as Attempt
 from engine.lib.pyworld import pyworld_vc
 from engine.lib.utils import np_safesave
-from engine.singleton import FEATS_DIR, Preparation
-from engine.utils import DATA_DIR
+from engine.prev.attempt10_dataset import Dataset09, Feats09
+from engine.singleton import DATA_DIR, FEATS_DIR, P
 
 # TODO: index.reconstruct_batch を使って key を復元したいけど、なぜかうまくいかなかった。
 
@@ -64,11 +63,11 @@ class FeatureDataset(Dataset):
   def __len__(self) -> int:
     return len(self.starts)
 
-  def __getitem__(self, index: int) -> FeatureEntry4:
+  def __getitem__(self, index: int) -> Feats09:
     d, speaker_id, start = self.starts[index]
 
-    # TODO: 面倒なので IntraDomainDataset4.load_entry を呼んでる
-    return IntraDomainDataset4.load_entry(None, d, speaker_id, start, self.frames)
+    # TODO: 面倒なので直接呼んでる
+    return Dataset09.load_entry(None, d, speaker_id, start, self.frames)
 
 def prepare():
   for speaker_id in tqdm(P.dataset.speaker_ids, ncols=0, leave=False):
@@ -91,7 +90,7 @@ def prepare():
     spkembs = []
     for batch in tqdm(loader, ncols=0, desc=f"Loading {speaker_id}", leave=False):
       with torch.inference_mode():
-        batch: FeatureEntry4 = model.transfer_batch_to_device(batch, model.device, 0)
+        batch: Feats09 = model.transfer_batch_to_device(batch, model.device, 0)
 
         ref_energy = model.vc_model.forward_energy(batch.energy.float())
         ref_pitch = model.vc_model.forward_pitch(batch.pitch_i)
@@ -235,9 +234,8 @@ def convert(audio, sr, tgt_speaker_id, pitch_scale, pitch_shift, ex_key, ex_val,
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 DEVICE = "cpu"
 
-P = Preparation(DEVICE)
+P.set_device(DEVICE)
 
-Attempt.P = P  # TODO: もっといい方法ない？
 model = Attempt.VCModule.load_from_checkpoint(CKPT, map_location=DEVICE)
 model.eval()
 model.freeze()

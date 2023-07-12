@@ -10,7 +10,7 @@
 # NOTE: phoneme の場合に、同じ音素が二連続に入ることがあるけど、モデルの方でうまくやってくれると願う
 
 from os import PathLike
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -289,11 +289,8 @@ class HubertSoft:  # (feat_len, 256)
       return HubertSoft(torch.hub.load("bshall/hubert:main", "hubert_discrete"))
 
 if __name__ == "__main__":
-  from tqdm import tqdm
+  from engine.singleton import P
 
-  from engine.singleton import Preparation
-
-  P = Preparation("cpu")
   item = P.dataset[0]
   audio = item.audio[0].repeat(3)
   sr = 22050

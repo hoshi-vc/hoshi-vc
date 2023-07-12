@@ -10,8 +10,7 @@ import numpy as np
 from torch import Tensor
 from torch.utils.data import DataLoader, RandomSampler, Subset
 
-from engine.dataset_feats import IntraDomainDataModule, IntraDomainDataset
-from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, Preparation)
+from engine.singleton import CREPE_MODEL, FEATS_DIR, PITCH_TOPK, P
 
 # TODO: dataset_feats と重複が多いので、整理する
 
@@ -80,19 +79,19 @@ class IntraDomainDatasetA07(IntraDomainDataset):
     return IntraDomainEntryA07(src, aug, ref)
 
 class IntraDomainDataModuleA07(IntraDomainDataModule):
-  def __init__(self, P: Preparation, aug_root: str, frames: int, n_samples: int, batch_size: int, num_workers=4, n_batches=None, n_batches_val=None):
-    super().__init__(P, frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDatasetA07)
+  def __init__(self, aug_root: str, frames: int, n_samples: int, batch_size: int, num_workers=4, n_batches=None, n_batches_val=None):
+    super().__init__(frames, n_samples, batch_size, num_workers, dataset_class=IntraDomainDatasetA07)
     self.aug_root = aug_root
     self.n_batches = n_batches
     self.n_batches_val = n_batches_val
 
   def setup(self, stage: str):
-    self.P.prepare_feats()
-    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
-    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
-    train_augs = [self.aug_root / "parallel100" / sid for sid in self.P.dataset.speaker_ids]
-    valid_augs = [self.aug_root / "nonpara30" / sid for sid in self.P.dataset.speaker_ids]
-    speaker_ids = [i for i, _ in enumerate(self.P.dataset.speaker_ids)]
+    P.prepare_feats()
+    train_dirs = [FEATS_DIR / "parallel100" / sid for sid in P.dataset.speaker_ids]
+    valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in P.dataset.speaker_ids]
+    train_augs = [self.aug_root / "parallel100" / sid for sid in P.dataset.speaker_ids]
+    valid_augs = [self.aug_root / "nonpara30" / sid for sid in P.dataset.speaker_ids]
+    speaker_ids = [i for i, _ in enumerate(P.dataset.speaker_ids)]
 
     self.intra_train = self.dataset_class(train_dirs, train_augs, speaker_ids, self.frames, self.frames, self.n_samples)
     self.intra_valid = self.dataset_class(valid_dirs, valid_augs, speaker_ids, self.frames, self.frames, self.n_samples, shuffle=7892639)

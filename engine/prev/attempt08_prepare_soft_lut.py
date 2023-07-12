@@ -11,8 +11,7 @@ import faiss
 import numpy as np
 from tqdm import tqdm
 
-from engine.singleton import Preparation
-from engine.utils import DATA_DIR
+from engine.singleton import DATA_DIR, P
 
 LUT_ROOT = DATA_DIR / "attempt08" / "lookup"
 
@@ -41,5 +40,5 @@ def prepare_audio():
       os.replace(str(SOFT_FILE) + ".tmp", SOFT_FILE)
 
 if __name__ == "__main__":
-  P = Preparation("cuda")
+  P.set_device("cuda")
   prepare_audio()

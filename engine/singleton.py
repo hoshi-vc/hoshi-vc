@@ -24,7 +24,8 @@ from engine.lib.feats import (Audio, Energy, HubertSoft, MelSpec, Phoneme, Pitch
 from engine.lib.trim import trim_silence
 from engine.lib.utils import Device, NPArray, make_parents, np_safesave
 from engine.lib.vocoder import HiFiGAN
-from engine.utils import DATA_DIR
+
+DATA_DIR = Path(__file__).parent.parent / "data"
 
 PITCH_TOPK = 8
 CREPE_MODEL = "tiny"
@@ -34,18 +35,17 @@ PHONEME_TOPK = 8
 FEATS_DIR = DATA_DIR / "feats"
 FAISS_DIR = DATA_DIR / "attempt01" / "faiss"
 
-class Preparation:
+class _Singleton:
   def __init__(self, device: Device):
     self._device_locked = False
-    self.device = device
+    self.set_device(device)
 
   @property
   def device(self):
     self._device_locked = True
     return self._device
 
-  @device.setter
-  def device(self, device: Device):
+  def set_device(self, device: Device):
     if self._device_locked: raise RuntimeError("Cannot change device")
     self._device = device
 
@@ -275,8 +275,10 @@ class Preparation:
     if "mosnet" in self.__dict__:
       del self.__dict__["mosnet"]
 
+P = _Singleton("cpu")
+
 if __name__ == "__main__":
-  P = Preparation("cuda")
+  P.set_device("cuda")
   P.prepare_feats()
   P.prepare_faiss()
 
