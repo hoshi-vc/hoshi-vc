@@ -18,12 +18,11 @@ import torch.functional as F
 import torch.nn.functional as F
 import torch.optim.lr_scheduler as S
 import wandb
-from lightning.pytorch import profilers
 from torch import Tensor, nn
 from torch.optim import AdamW
 
 import engine.hifi_gan.models as VOC
-from engine.attempts.a10_dataset import DataModule10, Entry10, Feats10
+from engine.attempts.a10_dataset import (DataModule10, Entry10, Feats10, FeatsList)
 from engine.attempts.utils import (BaseLightningModule, BinarySchedule, LinearSchedule, club_ksp_net, default_hifigan, load_hifigan_do, load_hifigan_g,
                                    log_attentions, log_audios, log_lr, log_spectrograms, log_spksim1, loss_hifigan_d, loss_hifigan_g, loss_spd_adcgan,
                                    loss_spd_adcgan_g, new_checkpoint_callback_wandb, new_wandb_logger, setup_train_environment, spd_net, step_optimizer,
@@ -476,8 +475,8 @@ class VCModule(BaseLightningModule):
 
     # e2e
 
-    y_g_hat = None
-    y_g_hat_mel = None
+    e2e_y_hat = None
+    e2e_y_hat_mel = None
     if debug or e2e:
 
       # vocoder
@@ -493,12 +492,13 @@ class VCModule(BaseLightningModule):
       e2e_mel = mel[:, e2e_start:e2e_end].transpose(1, 2)
       e2e_mel_hat = mel_hat[:, e2e_start:e2e_end].transpose(1, 2)
 
-      y_g_hat = self.vocoder(e2e_mel_hat)
-      y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000, fast=True)
+      e2e_y_hat = self.vocoder(e2e_mel_hat)
+      e2e_y_hat_mel = mel_spectrogram(
+          e2e_y_hat.squeeze(1), sampling_rate=22050, n_fft=1024, num_mels=80, hop_size=256, win_size=1024, fmin=0, fmax=8000, fast=True)
 
       # discriminator
 
-      losses_disc = loss_hifigan_d(self.vocoder_mpd, self.vocoder_msd, e2e_y, y_g_hat)
+      losses_disc = loss_hifigan_d(self.vocoder_mpd, self.vocoder_msd, e2e_y, e2e_y_hat)
       total_disc = losses_disc.s + losses_disc.f
 
       if train:
@@ -511,20 +511,20 @@ class VCModule(BaseLightningModule):
 
       # e2e generator loss
 
-      loss_mel = F.l1_loss(e2e_mel, y_g_hat_mel)
+      e2e_loss_mel = F.l1_loss(e2e_mel, e2e_y_hat_mel)
 
-      e2e_losses = loss_hifigan_g(self.vocoder_mpd, self.vocoder_msd, e2e_y, y_g_hat)
-      e2e_model_loss = e2e_losses.f + e2e_losses.s + e2e_losses.fm_f + e2e_losses.fm_s + loss_mel * 45.0
+      e2e_losses = loss_hifigan_g(self.vocoder_mpd, self.vocoder_msd, e2e_y, e2e_y_hat)
+      e2e_model_loss = e2e_losses.f + e2e_losses.s + e2e_losses.fm_f + e2e_losses.fm_s + e2e_loss_mel * 45.0
 
       if log:
         self.log(f"Charts (E2E)/{log}_e2e_gen_f", e2e_losses.f)
         self.log(f"Charts (E2E)/{log}_e2e_gen_s", e2e_losses.s)
         self.log(f"Charts (E2E)/{log}_e2e_fm_f", e2e_losses.fm_f)
         self.log(f"Charts (E2E)/{log}_e2e_fm_s", e2e_losses.fm_s)
-        self.log(f"Charts (Main)/{log}_e2e_reconst", loss_mel)
+        self.log(f"Charts (Main)/{log}_e2e_reconst", e2e_loss_mel)
 
-      y_g_hat = y_g_hat.squeeze(1)
-      y_g_hat_mel = y_g_hat_mel.transpose(1, 2)
+      e2e_y_hat = e2e_y_hat.squeeze(1)
+      e2e_y_hat_mel = e2e_y_hat_mel.transpose(1, 2)
 
     # generator (speaker discriminator loss)
 
@@ -552,7 +552,7 @@ class VCModule(BaseLightningModule):
     if log:
       self.log(f"Charts (Main)/{log}_loss", total_model)
 
-    return mel_hat, y_g_hat, y_g_hat_mel, vc_attn, []
+    return mel_hat, e2e_y_hat, e2e_y_hat_mel, vc_attn, []
 
   def vocoder_forward(self, mel: Tensor):
     return self.vocoder(mel.transpose(1, 2)).squeeze(1)
@@ -668,7 +668,9 @@ if __name__ == "__main__":
   setup_train_environment()
 
   P.set_device("cuda")
-  datamodule = DataModule10(frames=256, frames_ref=32, n_refs=32, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True)
+  data_req = FeatsList(audio=True, speaker=True, energy=True, mel=True, pitch_i=True, pitch_v=True, soft=True)
+  datamodule = DataModule10(
+      frames=256, frames_ref=32, n_refs=32, ref_max_kth=64, batch_size=8, n_batches=1000, n_batches_val=200, same_density=True, req=data_req)
 
   total_steps = 20000
   total_actual_steps = 10000
@@ -711,7 +713,7 @@ if __name__ == "__main__":
       # not benchmark and deterministic にしたら spkemb の計算の conv1d が大部分の時間を占めた
       # detect_anomaly=True,
       # deterministic=True,
-      # profiler=profilers.PyTorchProfiler(
+      # profiler=L.profilers.PyTorchProfiler(
       #     DATA_DIR / "profiler",
       #     schedule=torch.profiler.schedule(wait=0, warmup=30, active=6, repeat=1),
       #     on_trace_ready=torch.profiler.tensorboard_trace_handler(DATA_DIR / "profiler"),

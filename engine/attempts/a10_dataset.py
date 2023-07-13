@@ -3,6 +3,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
 # If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+from dataclasses import dataclass
+from os import sep
 from pathlib import Path
 from random import Random
 from typing import Any, NamedTuple, Optional
@@ -18,6 +20,22 @@ from engine.attempts.a10_prepare import LUT_ROOT
 from engine.lib.utils import NPArray, clamp
 from engine.singleton import (CREPE_MODEL, FEATS_DIR, PHONEME_TOPK, PITCH_TOPK, P)
 
+@dataclass
+class FeatsList:
+  audio: bool = False
+  speaker: bool = False
+  energy: bool = False
+  mel: bool = False
+  phoneme_i: bool = False
+  phoneme_v: bool = False
+  pitch_i: bool = False
+  pitch_v: bool = False
+  soft: bool = False
+
+  @staticmethod
+  def all():
+    return FeatsList(True, True, True, True, True, True, True, True, True)
+
 class Feats10(NamedTuple):
   audio: Tensor
   speaker: Tensor
@@ -29,22 +47,26 @@ class Feats10(NamedTuple):
   pitch_v: Tensor
   soft: Tensor
 
-  def load(accessor: Optional["NPAccessor"], d: str, speaker_id: int, start: int, frames: int) -> "Feats10":
+  def load(accessor: Optional["NPAccessor"], d: Path | str, speaker_id: int, start: int, frames: int, req: FeatsList | None = None) -> "Feats10":
     end = start + frames
 
-    if accessor is None: load = lambda p: np.load(Path(d) / p, mmap_mode="r")
-    else: load = lambda p: accessor.load(Path(d) / p)
+    if req is None: req = FeatsList.all()
+
+    # Path を使うときのオーバーヘッドが無視できないので、 sep で単純につなげる
+    d = str(d)
+    if accessor is None: load = lambda p: np.load(d + sep + p, mmap_mode="r")
+    else: load = lambda p: accessor.load(d + sep + p)
 
     return Feats10(
-        audio=np.array(load("audio.npy")[start * 256:end * 256]),
-        speaker=np.array([speaker_id]),
-        energy=np.array(load("energy.npy")[start:end]),
-        mel=np.array(load("melspec.npy")[start:end]),
-        phoneme_i=np.array(load(f"phoneme_i_{PHONEME_TOPK}.npy")[start:end], np.int64),
-        phoneme_v=np.array(load(f"phoneme_v_{PHONEME_TOPK}.npy")[start:end]),
-        pitch_i=np.array(load(f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end], np.int64),
-        pitch_v=np.array(load(f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end]),
-        soft=np.array(load("hubert_soft.npy")[start:end]),
+        audio=np.array(load("audio.npy")[start * 256:end * 256]) if req.audio else (),
+        speaker=np.array([speaker_id]) if req.speaker else (),
+        energy=np.array(load("energy.npy")[start:end]) if req.energy else (),
+        mel=np.array(load("melspec.npy")[start:end]) if req.mel else (),
+        phoneme_i=np.array(load(f"phoneme_i_{PHONEME_TOPK}.npy")[start:end], np.int64) if req.phoneme_i else (),
+        phoneme_v=np.array(load(f"phoneme_v_{PHONEME_TOPK}.npy")[start:end]) if req.phoneme_v else (),
+        pitch_i=np.array(load(f"pitch_i_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end], np.int64) if req.pitch_i else (),
+        pitch_v=np.array(load(f"pitch_v_{CREPE_MODEL}_{PITCH_TOPK}.npy")[start:end]) if req.pitch_v else (),
+        soft=np.array(load("hubert_soft.npy")[start:end]) if req.soft else (),
     )
 
 class Entry10(NamedTuple):
@@ -54,12 +76,12 @@ class Entry10(NamedTuple):
   tgt_ref: list[Feats10]
 
 class NPAccessor:
+  """ open_memmap が遅いので、キャッシュする """
   def __init__(self, cache: bool):
     self.cache = cache
     self.cache_dict: dict[str, NPArray] = {}
 
-  def load(self, p: Path) -> NPArray:
-    p = p.resolve()
+  def load(self, p: str) -> NPArray:
     if p in self.cache_dict: return self.cache_dict[p]
     if self.cache:
       self.cache_dict[p] = np.load(p, mmap_mode="r")
@@ -91,6 +113,7 @@ class Dataset10(Dataset):
       shuffle: Optional[int],
       rand_tgt: int,
       same_density=False,
+      req: FeatsList | None = None,
   ):
     assert len(dirs) == len(indices) == len(speaker_ids)
     assert frames >= frames_ref
@@ -104,6 +127,7 @@ class Dataset10(Dataset):
     self.n_refs = n_refs
     self.ref_max_kth = ref_max_kth
     self.same_density = same_density
+    self.req = req
 
     self.starts: list[tuple[str, str, IndexPreTransform, int, int]] = []
     self.max_ref_lens: dict[str, int] = {}
@@ -118,7 +142,7 @@ class Dataset10(Dataset):
     self.rand_tgt = Random(rand_tgt)
 
   def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
-    return Feats10.load(self.accessor, d, speaker_id, start, frames)
+    return Feats10.load(self.accessor, d, speaker_id, start, frames, self.req)
 
   def __len__(self) -> int:
     return len(self.starts)
@@ -252,6 +276,7 @@ class DataModule10(L.LightningDataModule):
       n_batches: int,
       n_batches_val: int,
       same_density: bool,
+      req: FeatsList | None = None,
       cache=True,
       num_workers=8,
       prefetch_factor=2,
@@ -265,6 +290,7 @@ class DataModule10(L.LightningDataModule):
     self.n_batches = n_batches
     self.n_batches_val = n_batches_val
     self.same_density = same_density
+    self.req = req
     self.num_workers = num_workers
     self.prefetch_factor = prefetch_factor
     self.accessor = NPAccessor(cache=cache)
@@ -299,6 +325,7 @@ class DataModule10(L.LightningDataModule):
         shuffle=None,
         rand_tgt=29836458,
         same_density=self.same_density,
+        req=self.req,
     )
     self.intra_valid = Dataset10(
         accessor=self.accessor,
@@ -316,6 +343,7 @@ class DataModule10(L.LightningDataModule):
         shuffle=7892639,
         rand_tgt=29836458,
         same_density=self.same_density,
+        req=self.req,
     )
     self.intra_valid = Subset(self.intra_valid, Random(37892834).choices(list(range(len(self.intra_valid))), k=self.n_batches_val * self.batch_size))
 
@@ -340,3 +368,29 @@ class DataModule10(L.LightningDataModule):
         pin_memory=True,
         prefetch_factor=self.prefetch_factor,
     )
+
+def bench():
+  # dataloader がボトルネックになっていたので、調査のために。
+  from tqdm import tqdm
+
+  P.set_device("cuda")
+
+  datamodule = DataModule10(
+      frames=256,
+      frames_ref=32,
+      n_refs=32,
+      ref_max_kth=32,
+      batch_size=8,
+      n_batches=200,
+      n_batches_val=100,
+      same_density=True,
+      num_workers=0,
+      prefetch_factor=None,
+  )
+
+  datamodule.setup("train")
+  for _ in tqdm(datamodule.train_dataloader(), ncols=0, desc="Train"):
+    pass
+
+if __name__ == "__main__":
+  bench()
