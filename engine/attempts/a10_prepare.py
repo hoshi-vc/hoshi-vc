@@ -15,7 +15,7 @@ from engine.singleton import DATA_DIR, P
 
 LUT_ROOT = DATA_DIR / "a10" / "lookup"
 
-def prepare_audio():
+def prepare():
   for category_id in ["parallel100", "nonpara30"]:
     for speaker_id in tqdm(P.dataset.speaker_ids, ncols=0, desc=f"{category_id}", leave=False):
       SP_DIR = LUT_ROOT / category_id / speaker_id
@@ -41,4 +41,4 @@ def prepare_audio():
 
 if __name__ == "__main__":
   P.set_device("cuda")
-  prepare_audio()
+  prepare()

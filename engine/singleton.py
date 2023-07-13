@@ -36,8 +36,8 @@ FEATS_DIR = DATA_DIR / "feats"
 
 class _Singleton:
   def __init__(self, device: Device):
+    self._device = device
     self._device_locked = False
-    self.set_device(device)
 
   @property
   def device(self):
@@ -45,6 +45,7 @@ class _Singleton:
     return self._device
 
   def set_device(self, device: Device):
+    if self._device == device: return
     if self._device_locked: raise RuntimeError("Cannot change device")
     self._device = device
 

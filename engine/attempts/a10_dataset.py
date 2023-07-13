@@ -72,8 +72,6 @@ class Feats10(NamedTuple):
 class Entry10(NamedTuple):
   src: Feats10
   ref: list[Feats10]
-  tgt_speaker: Tensor
-  tgt_ref: list[Feats10]
 
 class NPAccessor:
   """ open_memmap が遅いので、キャッシュする """
@@ -95,7 +93,43 @@ class NPAccessor:
   def clear_cache(self) -> None:
     self.cache_dict.clear()
 
+class FeatsDataset10(Dataset):
+  """ Feats10 のデータセット """
+  def __init__(
+      self,
+      accessor: NPAccessor,
+      dirs: list[str],
+      speaker_ids: list[int],
+      frames: int,
+      drop_last: bool,
+      req: FeatsList | None = None,
+  ):
+    assert len(dirs) == len(speaker_ids)
+
+    self.accessor = accessor
+    self.frames = frames
+    self.req = req
+
+    self.starts: list[tuple[str, int, int]] = []
+    for d, speaker_id in zip(dirs, speaker_ids):
+      length = np.load(d / "melspec.npy", mmap_mode="r").shape[0]
+      start_last = length - frames if drop_last else length
+      for start in range(0, start_last, frames):
+        self.starts.append((d, speaker_id, start))
+
+  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
+    return Feats10.load(self.accessor, d, speaker_id, start, frames, self.req)
+
+  def __len__(self) -> int:
+    return len(self.starts)
+
+  def __getitem__(self, index: int) -> Entry10:
+    d, speaker_id, start = self.starts[index]
+
+    return self.load_entry(d, speaker_id, start, self.frames)
+
 class Dataset10(Dataset):
+  """ Reference をいい感じに選ぶデータセット """
   def __init__(
       self,
       accessor: NPAccessor,
@@ -111,7 +145,6 @@ class Dataset10(Dataset):
       rand_ref_kth: int,
       rand_start: Optional[int],
       shuffle: Optional[int],
-      rand_tgt: int,
       same_density=False,
       req: FeatsList | None = None,
   ):
@@ -139,10 +172,11 @@ class Dataset10(Dataset):
 
     if shuffle: Random(shuffle).shuffle(self.starts)
 
-    self.rand_tgt = Random(rand_tgt)
-
-  def load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
+  def _load_entry(self, d: str, speaker_id: int, start: int, frames: int) -> Feats10:
     return Feats10.load(self.accessor, d, speaker_id, start, frames, self.req)
+
+  def _get_key(self, d: str, speaker_id: int, start: int, frames: int, feats: Feats10, key_indices: list[int]) -> Tensor:
+    return feats.soft[key_indices]
 
   def __len__(self) -> int:
     return len(self.starts)
@@ -153,7 +187,7 @@ class Dataset10(Dataset):
 
     max_ref_len = self.max_ref_lens[dref]
 
-    src = self.load_entry(d, speaker_id, start, self.frames)
+    src = self._load_entry(d, speaker_id, start, self.frames)
 
     if not self.same_density:
       key_indices = self.rand_refs.sample(range(len(src.soft)), self.n_refs)
@@ -162,7 +196,7 @@ class Dataset10(Dataset):
       key_indices = np.linspace(0, len(src.soft) - self.frames_ref * 2, self.n_refs, dtype=np.int64)
       key_indices += self.rand_refs.randint(0, self.frames_ref)
 
-    keys = src.soft[key_indices]
+    keys = self._get_key(d, speaker_id, start, self.frames, src, key_indices)
 
     _, ref_indices = faiss.search(keys.astype(np.float32), self.ref_max_kth)
 
@@ -212,54 +246,10 @@ class Dataset10(Dataset):
 
     refs: list[Feats10] = []
     for ref_start in ref_starts:
-      ref = self.load_entry(dref, speaker_id, ref_start, self.frames_ref)
+      ref = self._load_entry(dref, speaker_id, ref_start, self.frames_ref)
       refs.append(ref)
 
-    # === tgt_refs
-
-    tgt_speaker_id = speaker_id
-    while tgt_speaker_id == speaker_id:
-      tgt_d, tgt_dref, tgt_faiss, tgt_speaker_id, _ = self.rand_tgt.choice(self.starts)
-    tgt_max_ref_len = self.max_ref_lens[tgt_dref]
-    _, tgt_ref_indices = tgt_faiss.search(keys.astype(np.float32), self.ref_max_kth)
-
-    ref_starts = []
-    for i in range(self.n_refs):
-      can_be: list[int] = []
-      ref_start: int | None = None
-      for k in range(self.ref_max_kth):
-        candidate_middle = tgt_ref_indices[i, k]
-        candidate_start = clamp(candidate_middle - self.frames_ref // 2, 0, tgt_max_ref_len - self.frames_ref)
-
-        can_be.append(candidate_start)
-
-        margin = self.frames_ref // 4
-        if any(ref_start + margin <= candidate_middle < ref_start + self.frames_ref - margin for ref_start in ref_starts): continue
-
-        ref_start = candidate_start
-        break
-
-      if ref_start is None:
-        if len(can_be) > 0:
-          ref_start = can_be[0]
-        elif i > 0:
-          ref_start = ref_start[-1]
-        else:
-          print(f"Error: No suitable reference for target speaker found. Please increase ref_max_kth. (spk={speaker_id}, start={start})")
-          ref_start = 0
-
-      ref_starts.append(ref_start)
-
-    assert len(ref_starts) == self.n_refs
-
-    tgt_refs: list[Feats10] = []
-    for ref_start in ref_starts:
-      ref = self.load_entry(tgt_dref, tgt_speaker_id, ref_start, self.frames_ref)
-      tgt_refs.append(ref)
-
-    # === Return
-
-    return Entry10(src, refs, np.array([tgt_speaker_id]), tgt_refs)
+    return Entry10(src, refs)
 
 def intersect(start1: int, end1: int, start2: int, end2: int) -> bool:
   """ [start1, end1) と [start2, end2) の共通部分があるかどうかを判定する。 """
@@ -298,18 +288,23 @@ class DataModule10(L.LightningDataModule):
     self.intra_train: Any = None
     self.intra_valid: Any = None
 
-  def setup(self, stage: str):
+  @property
+  def _dataset_class(self):  # 継承したクラスで上書きしたいので、プロパティにしてみた
+    return Dataset10
+
+  def setup(self, stage: str | None = None):
     P.prepare_feats()
     train_dirs = [FEATS_DIR / "parallel100" / sid for sid in P.dataset.speaker_ids]
     train_look = [LUT_ROOT / "parallel100" / sid for sid in P.dataset.speaker_ids]
     valid_dirs = [FEATS_DIR / "nonpara30" / sid for sid in P.dataset.speaker_ids]
-    # valid_look = [LUT_ROOT / "nonpara30" / sid for sid in P.dataset.speaker_ids]
     speaker_ids = [i for i, _ in enumerate(P.dataset.speaker_ids)]
 
     train_look = [faiss.read_index(str(p / "soft.index")) for p in train_look]
-    # valid_look = [faiss.read_index(str(p / "soft.index")) for p in valid_look]
 
-    self.intra_train = Dataset10(
+    self._setup_datasets(train_dirs, valid_dirs, train_look, speaker_ids)
+
+  def _setup_datasets(self, train_dirs: list[str], valid_dirs: list[str], train_look: list[Any], speaker_ids: list[int]):
+    self.intra_train = self._dataset_class(
         accessor=self.accessor,
         dirs=train_dirs,
         dirs_ref=train_dirs,
@@ -323,11 +318,10 @@ class DataModule10(L.LightningDataModule):
         rand_ref_kth=64378234,
         rand_start=35534253,
         shuffle=None,
-        rand_tgt=29836458,
         same_density=self.same_density,
         req=self.req,
     )
-    self.intra_valid = Dataset10(
+    self.intra_valid = self._dataset_class(
         accessor=self.accessor,
         dirs=valid_dirs,
         dirs_ref=train_dirs,
@@ -341,7 +335,6 @@ class DataModule10(L.LightningDataModule):
         rand_ref_kth=64378234,
         rand_start=None,
         shuffle=7892639,
-        rand_tgt=29836458,
         same_density=self.same_density,
         req=self.req,
     )
@@ -388,7 +381,7 @@ def bench():
       prefetch_factor=None,
   )
 
-  datamodule.setup("train")
+  datamodule.setup()
   for _ in tqdm(datamodule.train_dataloader(), ncols=0, desc="Train"):
     pass
 
